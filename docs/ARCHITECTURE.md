@@ -12,16 +12,17 @@
 ```
 bot/
 ├── main.py              # entry point
-├── config.py            # env config
+├── config.py            # SUPERUSER_* / MAINADMIN_* from env
 ├── db.py                # SQLite CRUD
+├── filters.py           # IsAdmin, IsSuper
 ├── keyboards.py         # reply/inline keyboards
 ├── middlewares/
-│   └── access.py        # whitelist check
+│   └── access.py        # super / admin / whitelist
 ├── handlers/
 │   ├── common.py        # /start, main menu
 │   ├── catalog.py       # catalog, item card
 │   ├── booking.py       # book, cancel, my bookings
-│   └── admin.py         # add item FSM, carts, whitelist
+│   └── admin.py         # items, carts, whitelist, admins (super)
 └── tasks/
     └── expiry.py        # 12h auto-cancel
 ```
@@ -31,6 +32,10 @@ bot/
 ### whitelist
 - `id`, `username` (lowercase, без @), `added_at`
 
+### admins
+- `id`, `username` (UNIQUE), `user_id` (UNIQUE, nullable), `added_at`
+- `user_id` заполняется при первом сообщении админа боту
+
 ### items
 - `id`, `name`, `price`, `photo_file_id`, `status`, `created_at`
 - status: `available` | `pending` | `hidden`
@@ -39,7 +44,22 @@ bot/
 - `id`, `item_id`, `user_id`, `username`, `status`, `created_at`, `expires_at`
 - status: `pending` | `confirmed` | `rejected` | `expired` | `cancelled`
 
+## Роли (доступ)
+
+| Роль | Проверка | Права |
+|------|----------|-------|
+| Супер | `user.id == SUPERUSER_ID` | Всё + «Админы» |
+| Админ | таблица `admins` | Товары, брони, whitelist |
+| User | `whitelist` | Каталог, брони |
+
+`MAINADMIN_USERNAME` — только для текста «напишите админу @…», без прав доступа.
+
 ## Потоки
+
+### Каталог
+1. User → «Каталог»
+2. Бот шлёт альбом фото (по 10 в группе) + сообщение с inline-кнопками
+3. Клик по кнопке → карточка товара (фото + действия)
 
 ### Бронирование
 1. User → «Забронировать» на `available` товаре
@@ -74,11 +94,16 @@ bot/
 | `admin:reject_all:{user_id}` | Отклонить всё |
 | `admin:confirm:{booking_id}:{user_id}` | Подтвердить товар |
 | `admin:reject:{booking_id}:{user_id}` | Отклонить товар |
+| `admin:user_add` / `admin:user_remove` | Whitelist FSM |
+| `super:admin_add` / `super:admin_remove` | Admins FSM (только супер) |
 
 ## Доступ
 
 `AccessMiddleware` пропускает:
-- `user.id == ADMIN_ID`
+- `user.id == SUPERUSER_ID` (супер)
+- username / user_id в таблице `admins`
 - `user.username` в whitelist (lowercase)
 
 Иначе — «Нет доступа».
+При апдейте от username из `admins` — привязка `user_id`.
+В инструкциях пользователям показывается `@MAINADMIN_USERNAME`.

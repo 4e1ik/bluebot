@@ -12,7 +12,7 @@ def _booking_instruction(config: Config) -> str:
     return (
         f"Товар забронирован на {config.booking_ttl_hours} часов.\n"
         f"Когда закончите выбор товаров — напишите админу "
-        f"@{config.admin_username} для согласования."
+        f"@{config.mainadmin_username} для согласования."
     )
 
 
@@ -43,9 +43,9 @@ async def my_bookings(message: Message, db: Database, config: Config) -> None:
     total = sum(b["price"] for b in bookings)
     lines = ["<b>Мои брони:</b>"]
     for i, b in enumerate(bookings, 1):
-        lines.append(f"{i}. {b['name']} — {b['price']:.0f}₽")
-    lines.append(f"\n<b>Итого: {total:.0f}₽</b>")
-    lines.append(f"\nНапишите админу @{config.admin_username} для согласования.")
+        lines.append(f"{i}. {b['name']} — {b['price']:.0f} Br")
+    lines.append(f"\n<b>Итого: {total:.0f} Br</b>")
+    lines.append(f"\nНапишите админу @{config.mainadmin_username} для согласования.")
 
     await message.answer(
         "\n".join(lines),
@@ -65,9 +65,9 @@ async def my_bookings_callback(callback: CallbackQuery, db: Database, config: Co
     total = sum(b["price"] for b in bookings)
     lines = ["<b>Мои брони:</b>"]
     for i, b in enumerate(bookings, 1):
-        lines.append(f"{i}. {b['name']} — {b['price']:.0f}₽")
-    lines.append(f"\n<b>Итого: {total:.0f}₽</b>")
-    lines.append(f"\nНапишите админу @{config.admin_username} для согласования.")
+        lines.append(f"{i}. {b['name']} — {b['price']:.0f} Br")
+    lines.append(f"\n<b>Итого: {total:.0f} Br</b>")
+    lines.append(f"\nНапишите админу @{config.mainadmin_username} для согласования.")
 
     await callback.message.edit_text(
         "\n".join(lines),
@@ -94,8 +94,8 @@ async def cancel_booking_by_id(callback: CallbackQuery, db: Database) -> None:
     total = sum(b["price"] for b in bookings)
     lines = ["Бронь снята. Товар снова доступен.\n", "<b>Мои брони:</b>"]
     for i, b in enumerate(bookings, 1):
-        lines.append(f"{i}. {b['name']} — {b['price']:.0f}₽")
-    lines.append(f"\n<b>Итого: {total:.0f}₽</b>")
+        lines.append(f"{i}. {b['name']} — {b['price']:.0f} Br")
+    lines.append(f"\n<b>Итого: {total:.0f} Br</b>")
     await callback.message.edit_text(
         "\n".join(lines),
         reply_markup=my_bookings_kb(bookings),

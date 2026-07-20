@@ -22,7 +22,13 @@ class AccessMiddleware(BaseMiddleware):
         if not user:
             return await handler(event, data)
 
-        is_admin = user.id == self.config.admin_id
+        is_super = user.id == self.config.superuser_id
+
+        if not is_super and user.username:
+            await self.db.bind_admin_user_id(user.username, user.id)
+
+        is_admin = is_super or await self.db.is_admin_user(user.id, user.username)
+        data["is_super"] = is_super
         data["is_admin"] = is_admin
 
         if is_admin:

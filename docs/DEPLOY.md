@@ -4,7 +4,7 @@
 
 1. Открыть [@BotFather](https://t.me/BotFather)
 2. `/newbot` → получить `BOT_TOKEN`
-3. Узнать свой `ADMIN_ID` через [@userinfobot](https://t.me/userinfobot)
+3. Узнать `SUPERUSER_ID` через [@userinfobot](https://t.me/userinfobot)
 
 ## 2. Подготовка сервера
 
@@ -21,12 +21,12 @@ nano .env
 Заполнить `.env`:
 ```
 BOT_TOKEN=...
-ADMIN_ID=...
-ADMIN_USERNAME=your_telegram_username
+SUPERUSER_ID=...
+SUPERUSER_USERNAME=superuser_telegram
+MAINADMIN_USERNAME=contact_for_buyers
 DB_PATH=data/blubot.db
 BOOKING_TTL_HOURS=12
 ```
-
 ## 3. Первый запуск
 
 ```bash

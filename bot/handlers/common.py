@@ -9,8 +9,10 @@ router = Router()
 
 
 @router.message(CommandStart())
-async def cmd_start(message: Message, is_admin: bool) -> None:
+async def cmd_start(message: Message, is_admin: bool, is_super: bool = False) -> None:
     text = "Добро пожаловать!"
-    if is_admin:
+    if is_super:
+        text += "\n\nВы суперпользователь."
+    elif is_admin:
         text += "\n\nВы администратор."
-    await message.answer(text, reply_markup=main_menu_kb(is_admin))
+    await message.answer(text, reply_markup=main_menu_kb(is_admin, is_super))

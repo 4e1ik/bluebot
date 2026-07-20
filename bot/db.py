@@ -13,6 +13,13 @@ CREATE TABLE IF NOT EXISTS whitelist (
     added_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS admins (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT NOT NULL UNIQUE,
+    user_id INTEGER UNIQUE,
+    added_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS items (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
@@ -103,6 +110,65 @@ class Database:
             rows = await cur.fetchall()
             return [row[0] for row in rows]
 
+    async def is_admin_user(self, user_id: int, username: str | None = None) -> bool:
+        norm = normalize_username(username)
+        async with aiosqlite.connect(self.path) as db:
+            cur = await db.execute(
+                "SELECT 1 FROM admins WHERE user_id = ?", (user_id,)
+            )
+            if await cur.fetchone() is not None:
+                return True
+            if norm:
+                cur = await db.execute(
+                    "SELECT 1 FROM admins WHERE username = ?", (norm,)
+                )
+                return await cur.fetchone() is not None
+            return False
+
+    async def bind_admin_user_id(self, username: str | None, user_id: int) -> None:
+        norm = normalize_username(username)
+        if not norm:
+            return
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                "UPDATE admins SET user_id = ? WHERE username = ?",
+                (user_id, norm),
+            )
+            await db.commit()
+
+    async def add_admin(self, username: str) -> bool:
+        norm = normalize_username(username)
+        if not norm:
+            return False
+        async with aiosqlite.connect(self.path) as db:
+            try:
+                await db.execute(
+                    "INSERT INTO admins (username) VALUES (?)", (norm,)
+                )
+                await db.commit()
+                return True
+            except aiosqlite.IntegrityError:
+                return False
+
+    async def remove_admin(self, username: str) -> bool:
+        norm = normalize_username(username)
+        if not norm:
+            return False
+        async with aiosqlite.connect(self.path) as db:
+            cur = await db.execute(
+                "DELETE FROM admins WHERE username = ?", (norm,)
+            )
+            await db.commit()
+            return cur.rowcount > 0
+
+    async def list_admins(self) -> list[str]:
+        async with aiosqlite.connect(self.path) as db:
+            cur = await db.execute(
+                "SELECT username FROM admins ORDER BY username"
+            )
+            rows = await cur.fetchall()
+            return [row[0] for row in rows]
+
     async def create_item(self, name: str, price: float, photo_file_id: str) -> int:
         async with aiosqlite.connect(self.path) as db:
             cur = await db.execute(
@@ -126,6 +192,16 @@ class Database:
             db.row_factory = aiosqlite.Row
             cur = await db.execute("SELECT * FROM items WHERE id = ?", (item_id,))
             return await cur.fetchone()
+
+    async def delete_item(self, item_id: int) -> bool:
+        async with aiosqlite.connect(self.path) as db:
+            cur = await db.execute("SELECT id FROM items WHERE id = ?", (item_id,))
+            if await cur.fetchone() is None:
+                return False
+            await db.execute("DELETE FROM bookings WHERE item_id = ?", (item_id,))
+            await db.execute("DELETE FROM items WHERE id = ?", (item_id,))
+            await db.commit()
+            return True
 
     async def get_pending_booking_for_item(self, item_id: int) -> aiosqlite.Row | None:
         async with aiosqlite.connect(self.path) as db:
