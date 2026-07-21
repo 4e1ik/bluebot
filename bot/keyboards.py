@@ -1,9 +1,18 @@
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
 
+BUTTON_LABEL_MAX = 56
+
+
+def _truncate(text: str, max_len: int = BUTTON_LABEL_MAX) -> str:
+    if len(text) <= max_len:
+        return text
+    return text[: max_len - 1] + "…"
+
 
 def main_menu_kb(is_admin: bool, is_super: bool = False) -> ReplyKeyboardMarkup:
     rows = [
         [KeyboardButton(text="Каталог"), KeyboardButton(text="Мои брони")],
+        [KeyboardButton(text="Помощь")],
     ]
     if is_admin:
         rows.append([KeyboardButton(text="Добавить товар")])
@@ -16,6 +25,13 @@ def main_menu_kb(is_admin: bool, is_super: bool = False) -> ReplyKeyboardMarkup:
     if is_super:
         rows.append([KeyboardButton(text="Админы")])
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
+
+def cancel_kb() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="Отмена")]],
+        resize_keyboard=True,
+    )
 
 
 def whitelist_kb() -> InlineKeyboardMarkup:
@@ -54,7 +70,7 @@ def catalog_kb(items: list) -> InlineKeyboardMarkup:
         status_mark = ""
         if item["status"] == "pending":
             status_mark = " 🔒"
-        label = f"{item['name']} — {item['price']:.0f} Br{status_mark}"
+        label = _truncate(f"{item['name']} — {item['price']:.0f} Br{status_mark}")
         buttons.append(
             [InlineKeyboardButton(text=label, callback_data=f"item:{item['id']}")]
         )
@@ -95,8 +111,23 @@ def my_bookings_kb(bookings: list) -> InlineKeyboardMarkup:
         rows.append(
             [
                 InlineKeyboardButton(
-                    text=f"❌ {b['name']} — {b['price']:.0f} Br",
+                    text=_truncate(f"❌ {b['name']} — {b['price']:.0f} Br"),
                     callback_data=f"cancel_booking:{b['id']}",
+                )
+            ]
+        )
+    if bookings:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="✅ Оформить заказ", callback_data="cart:submit"
+                )
+            ]
+        )
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="🗑 Очистить корзину", callback_data="cart:clear"
                 )
             ]
         )
@@ -108,7 +139,7 @@ def pending_carts_kb(carts: list) -> InlineKeyboardMarkup:
     rows = []
     for cart in carts:
         username = cart["username"]
-        label = (
+        label = _truncate(
             f"@{username} — {cart['item_count']} шт., "
             f"{cart['total_price']:.0f} Br"
         )
@@ -140,14 +171,15 @@ def user_cart_kb(user_id: int, bookings: list) -> InlineKeyboardMarkup:
         ]
     ]
     for b in bookings:
+        name = _truncate(b["name"], 20)
         rows.append(
             [
                 InlineKeyboardButton(
-                    text=f"✅ {b['name']}",
+                    text=f"✅ {name}",
                     callback_data=f"admin:confirm:{b['id']}:{user_id}",
                 ),
                 InlineKeyboardButton(
-                    text=f"❌ {b['name']}",
+                    text=f"❌ {name}",
                     callback_data=f"admin:reject:{b['id']}:{user_id}",
                 ),
             ]

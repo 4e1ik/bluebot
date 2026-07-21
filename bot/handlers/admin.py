@@ -13,7 +13,9 @@ from bot.db import Database, normalize_username
 from bot.filters import admin_router, super_router
 from bot.keyboards import (
     admins_kb,
+    cancel_kb,
     catalog_kb,
+    main_menu_kb,
     pending_carts_kb,
     user_cart_kb,
     whitelist_kb,
@@ -89,10 +91,29 @@ async def _admins_text(db: Database, config: Config) -> str:
     return "\n".join(lines)
 
 
+@admin_router.message(F.text == "Отмена")
+async def cancel_fsm(
+    message: Message,
+    state: FSMContext,
+    is_admin: bool = False,
+    is_super: bool = False,
+) -> None:
+    await state.clear()
+    await message.answer(
+        "Отменено.",
+        reply_markup=main_menu_kb(is_admin, is_super),
+        protect_content=True,
+    )
+
+
 @admin_router.message(F.text == "Добавить товар")
 async def add_item_start(message: Message, state: FSMContext) -> None:
     await state.set_state(AddItem.photo)
-    await message.answer("Отправьте фото товара:")
+    await message.answer(
+        "Отправьте фото товара (или «Отмена»):",
+        reply_markup=cancel_kb(),
+        protect_content=True,
+    )
 
 
 @admin_router.callback_query(F.data.startswith("admin:delete_item:"))
@@ -117,41 +138,64 @@ async def add_item_photo(message: Message, state: FSMContext) -> None:
     photo = message.photo[-1]
     await state.update_data(photo_file_id=photo.file_id)
     await state.set_state(AddItem.name)
-    await message.answer("Введите название товара:")
+    await message.answer(
+        "Введите название товара:",
+        reply_markup=cancel_kb(),
+        protect_content=True,
+    )
 
 
 @admin_router.message(AddItem.photo)
 async def add_item_photo_invalid(message: Message) -> None:
-    await message.answer("Нужно отправить фото.")
+    await message.answer(
+        "Нужно отправить фото или нажмите «Отмена».",
+        protect_content=True,
+    )
 
 
-@admin_router.message(AddItem.name, F.text)
+@admin_router.message(AddItem.name, F.text, F.text != "Отмена")
 async def add_item_name(message: Message, state: FSMContext) -> None:
     name = message.text.strip()
     if not name:
-        await message.answer("Название не может быть пустым.")
+        await message.answer("Название не может быть пустым.", protect_content=True)
         return
     await state.update_data(name=name)
     await state.set_state(AddItem.price)
-    await message.answer("Введите цену (число):")
+    await message.answer(
+        "Введите цену (число):",
+        reply_markup=cancel_kb(),
+        protect_content=True,
+    )
 
 
-@admin_router.message(AddItem.price, F.text)
-async def add_item_price(message: Message, state: FSMContext, db: Database) -> None:
+@admin_router.message(AddItem.price, F.text, F.text != "Отмена")
+async def add_item_price(
+    message: Message,
+    state: FSMContext,
+    db: Database,
+    is_admin: bool = False,
+    is_super: bool = False,
+) -> None:
     text = message.text.strip().replace(",", ".")
     try:
         price = float(text)
         if price <= 0:
             raise ValueError
     except ValueError:
-        await message.answer("Введите корректную цену (положительное число).")
+        await message.answer(
+            "Введите корректную цену (положительное число).",
+            protect_content=True,
+        )
         return
 
     data = await state.get_data()
     item_id = await db.create_item(data["name"], price, data["photo_file_id"])
     await state.clear()
-    await message.answer(f"Товар добавлен (id={item_id}).")
-
+    await message.answer(
+        f"Товар добавлен (id={item_id}).",
+        reply_markup=main_menu_kb(is_admin, is_super),
+        protect_content=True,
+    )
 
 @admin_router.message(F.text == "Ожидают подтверждения")
 async def pending_list(message: Message, db: Database) -> None:
@@ -261,7 +305,11 @@ async def users_menu(message: Message, db: Database, state: FSMContext) -> None:
 async def user_add_start(callback: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(ManageUser.waiting_username)
     await state.update_data(user_action="add")
-    await callback.message.answer("Введите @username пользователя для добавления:")
+    await callback.message.answer(
+        "Введите @username пользователя для добавления (или «Отмена»):",
+        reply_markup=cancel_kb(),
+        protect_content=True,
+    )
     await callback.answer()
 
 
@@ -269,17 +317,28 @@ async def user_add_start(callback: CallbackQuery, state: FSMContext) -> None:
 async def user_remove_start(callback: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(ManageUser.waiting_username)
     await state.update_data(user_action="remove")
-    await callback.message.answer("Введите @username пользователя для удаления:")
+    await callback.message.answer(
+        "Введите @username пользователя для удаления (или «Отмена»):",
+        reply_markup=cancel_kb(),
+        protect_content=True,
+    )
     await callback.answer()
 
 
-@admin_router.message(ManageUser.waiting_username, F.text)
+@admin_router.message(ManageUser.waiting_username, F.text, F.text != "Отмена")
 async def user_manage_username(
-    message: Message, state: FSMContext, db: Database
+    message: Message,
+    state: FSMContext,
+    db: Database,
+    is_admin: bool = False,
+    is_super: bool = False,
 ) -> None:
     username = _parse_username(message.text or "")
     if not username:
-        await message.answer("Неверный формат. Пример: @nickname")
+        await message.answer(
+            "Неверный формат. Пример: @nickname",
+            protect_content=True,
+        )
         return
 
     data = await state.get_data()
@@ -288,22 +347,43 @@ async def user_manage_username(
 
     if action == "add":
         if await db.add_to_whitelist(username):
-            await message.answer(f"@{normalize_username(username)} добавлен.")
+            await message.answer(
+                f"@{normalize_username(username)} добавлен.",
+                reply_markup=main_menu_kb(is_admin, is_super),
+                protect_content=True,
+            )
         else:
-            await message.answer("Пользователь уже в списке.")
+            await message.answer(
+                "Пользователь уже в списке.",
+                reply_markup=main_menu_kb(is_admin, is_super),
+                protect_content=True,
+            )
     elif action == "remove":
         if await db.remove_from_whitelist(username):
-            await message.answer(f"@{normalize_username(username)} удалён.")
+            await message.answer(
+                f"@{normalize_username(username)} удалён.",
+                reply_markup=main_menu_kb(is_admin, is_super),
+                protect_content=True,
+            )
         else:
-            await message.answer("Пользователь не найден.")
+            await message.answer(
+                "Пользователь не найден.",
+                reply_markup=main_menu_kb(is_admin, is_super),
+                protect_content=True,
+            )
     else:
-        await message.answer("Действие не выбрано. Откройте «Пользователи» снова.")
+        await message.answer(
+            "Действие не выбрано. Откройте «Пользователи» снова.",
+            reply_markup=main_menu_kb(is_admin, is_super),
+            protect_content=True,
+        )
         return
 
     await message.answer(
         await _users_text(db),
         reply_markup=whitelist_kb(),
         parse_mode="HTML",
+        protect_content=True,
     )
 
 
@@ -367,7 +447,11 @@ async def admins_menu(
 async def admin_add_start(callback: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(ManageAdmin.waiting_username)
     await state.update_data(admin_action="add")
-    await callback.message.answer("Введите @username админа для добавления:")
+    await callback.message.answer(
+        "Введите @username админа для добавления (или «Отмена»):",
+        reply_markup=cancel_kb(),
+        protect_content=True,
+    )
     await callback.answer()
 
 
@@ -375,27 +459,44 @@ async def admin_add_start(callback: CallbackQuery, state: FSMContext) -> None:
 async def admin_remove_start(callback: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(ManageAdmin.waiting_username)
     await state.update_data(admin_action="remove")
-    await callback.message.answer("Введите @username админа для удаления:")
+    await callback.message.answer(
+        "Введите @username админа для удаления (или «Отмена»):",
+        reply_markup=cancel_kb(),
+        protect_content=True,
+    )
     await callback.answer()
 
 
-@super_router.message(ManageAdmin.waiting_username, F.text)
+@super_router.message(ManageAdmin.waiting_username, F.text, F.text != "Отмена")
 async def admin_manage_username(
-    message: Message, state: FSMContext, db: Database, config: Config
+    message: Message,
+    state: FSMContext,
+    db: Database,
+    config: Config,
+    is_admin: bool = False,
+    is_super: bool = False,
 ) -> None:
     username = _parse_username(message.text or "")
     if not username:
-        await message.answer("Неверный формат. Пример: @nickname")
+        await message.answer(
+            "Неверный формат. Пример: @nickname",
+            protect_content=True,
+        )
         return
 
     norm = normalize_username(username)
     if norm == config.superuser_username:
         await state.clear()
-        await message.answer("Суперпользователя нельзя добавить или удалить через бота.")
+        await message.answer(
+            "Суперпользователя нельзя добавить или удалить через бота.",
+            reply_markup=main_menu_kb(is_admin, is_super),
+            protect_content=True,
+        )
         await message.answer(
             await _admins_text(db, config),
             reply_markup=admins_kb(),
             parse_mode="HTML",
+            protect_content=True,
         )
         return
 
@@ -405,20 +506,41 @@ async def admin_manage_username(
 
     if action == "add":
         if await db.add_admin(username):
-            await message.answer(f"@{norm} добавлен как админ.")
+            await message.answer(
+                f"@{norm} добавлен как админ.",
+                reply_markup=main_menu_kb(is_admin, is_super),
+                protect_content=True,
+            )
         else:
-            await message.answer("Админ уже в списке.")
+            await message.answer(
+                "Админ уже в списке.",
+                reply_markup=main_menu_kb(is_admin, is_super),
+                protect_content=True,
+            )
     elif action == "remove":
         if await db.remove_admin(username):
-            await message.answer(f"@{norm} удалён из админов.")
+            await message.answer(
+                f"@{norm} удалён из админов.",
+                reply_markup=main_menu_kb(is_admin, is_super),
+                protect_content=True,
+            )
         else:
-            await message.answer("Админ не найден.")
+            await message.answer(
+                "Админ не найден.",
+                reply_markup=main_menu_kb(is_admin, is_super),
+                protect_content=True,
+            )
     else:
-        await message.answer("Действие не выбрано. Откройте «Админы» снова.")
+        await message.answer(
+            "Действие не выбрано. Откройте «Админы» снова.",
+            reply_markup=main_menu_kb(is_admin, is_super),
+            protect_content=True,
+        )
         return
 
     await message.answer(
         await _admins_text(db, config),
         reply_markup=admins_kb(),
         parse_mode="HTML",
+        protect_content=True,
     )

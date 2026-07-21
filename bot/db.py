@@ -203,11 +203,20 @@ class Database:
             await db.commit()
             return True
 
+    async def list_admin_user_ids(self) -> list[int]:
+        async with aiosqlite.connect(self.path) as db:
+            cur = await db.execute(
+                "SELECT user_id FROM admins WHERE user_id IS NOT NULL"
+            )
+            rows = await cur.fetchall()
+            return [row[0] for row in rows]
+
     async def get_pending_booking_for_item(self, item_id: int) -> aiosqlite.Row | None:
         async with aiosqlite.connect(self.path) as db:
             db.row_factory = aiosqlite.Row
             cur = await db.execute(
-                "SELECT * FROM bookings WHERE item_id = ? AND status = 'pending'",
+                "SELECT * FROM bookings WHERE item_id = ? "
+                "AND status IN ('pending', 'submitted')",
                 (item_id,),
             )
             return await cur.fetchone()
@@ -217,9 +226,9 @@ class Database:
         item_id: int,
         user_id: int,
         username: str | None,
-        ttl_hours: int,
+        ttl_minutes: int,
     ) -> int | None:
-        expires = _now() + timedelta(hours=ttl_hours)
+        expires = _now() + timedelta(minutes=ttl_minutes)
         async with aiosqlite.connect(self.path) as db:
             db.row_factory = aiosqlite.Row
             cur = await db.execute(
@@ -256,6 +265,27 @@ class Database:
             )
             return await cur.fetchall()
 
+    async def submit_user_cart(self, user_id: int) -> list[aiosqlite.Row]:
+        bookings = await self.get_user_pending_bookings(user_id)
+        if not bookings:
+            return []
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                "UPDATE bookings SET status = 'submitted' "
+                "WHERE user_id = ? AND status = 'pending'",
+                (user_id,),
+            )
+            await db.commit()
+        return bookings
+
+    async def clear_user_cart(self, user_id: int) -> int:
+        bookings = await self.get_user_pending_bookings(user_id)
+        count = 0
+        for b in bookings:
+            if await self.cancel_booking(b["id"], user_id):
+                count += 1
+        return count
+
     async def cancel_booking(self, booking_id: int, user_id: int) -> bool:
         async with aiosqlite.connect(self.path) as db:
             db.row_factory = aiosqlite.Row
@@ -289,7 +319,7 @@ class Database:
                        SUM(i.price) AS total_price
                 FROM bookings b
                 JOIN items i ON i.id = b.item_id
-                WHERE b.status = 'pending'
+                WHERE b.status = 'submitted'
                 GROUP BY b.user_id
                 ORDER BY MIN(b.created_at)
                 """
@@ -305,7 +335,7 @@ class Database:
                 SELECT b.*, i.name, i.price
                 FROM bookings b
                 JOIN items i ON i.id = b.item_id
-                WHERE b.user_id = ? AND b.status = 'pending'
+                WHERE b.user_id = ? AND b.status = 'submitted'
                 ORDER BY b.created_at
                 """,
                 (user_id,),
@@ -317,7 +347,7 @@ class Database:
     ) -> bool:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
-            "SELECT * FROM bookings WHERE id = ? AND status = 'pending'",
+            "SELECT * FROM bookings WHERE id = ? AND status = 'submitted'",
             (booking_id,),
         )
         booking = await cur.fetchone()

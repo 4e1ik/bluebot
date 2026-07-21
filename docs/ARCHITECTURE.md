@@ -11,99 +11,40 @@
 
 ```
 bot/
-├── main.py              # entry point
-├── config.py            # SUPERUSER_* / MAINADMIN_* from env
-├── db.py                # SQLite CRUD
-├── filters.py           # IsAdmin, IsSuper
-├── keyboards.py         # reply/inline keyboards
-├── middlewares/
-│   └── access.py        # super / admin / whitelist
+├── main.py              # entry point, protect_content default
+├── config.py            # SUPERUSER_*, CART_TTL_MINUTES
+├── db.py
+├── notify.py            # notify_admins (без супера)
+├── filters.py
+├── keyboards.py
+├── middlewares/access.py
 ├── handlers/
-│   ├── common.py        # /start, main menu
-│   ├── catalog.py       # catalog, item card
-│   ├── booking.py       # book, cancel, my bookings
-│   └── admin.py         # items, carts, whitelist, admins (super)
-└── tasks/
-    └── expiry.py        # 12h auto-cancel
+│   ├── common.py        # /start, Помощь
+│   ├── catalog.py
+│   ├── booking.py       # корзина, оформить/очистить
+│   └── admin.py
+└── tasks/expiry.py      # 20 мин pending → expired
 ```
 
-## Схема БД
+## Брони: статусы
 
-### whitelist
-- `id`, `username` (lowercase, без @), `added_at`
+`pending` → `submitted` (оформить) → `confirmed`/`rejected`  
+`pending` → `cancelled` / `expired`
 
-### admins
-- `id`, `username` (UNIQUE), `user_id` (UNIQUE, nullable), `added_at`
-- `user_id` заполняется при первом сообщении админа боту
+## Каталог
 
-### items
-- `id`, `name`, `price`, `photo_file_id`, `status`, `created_at`
-- status: `available` | `pending` | `hidden`
+Список кнопок → клик → фото карточки. Альбома нет.
 
-### bookings
-- `id`, `item_id`, `user_id`, `username`, `status`, `created_at`, `expires_at`
-- status: `pending` | `confirmed` | `rejected` | `expired` | `cancelled`
+## Уведомления
 
-## Роли (доступ)
+`notify_admins`: только `admins.user_id`, после `cart:submit`.
 
-| Роль | Проверка | Права |
-|------|----------|-------|
-| Супер | `user.id == SUPERUSER_ID` | Всё + «Админы» |
-| Админ | таблица `admins` | Товары, брони, whitelist |
-| User | `whitelist` | Каталог, брони |
+## Env
 
-`MAINADMIN_USERNAME` — только для текста «напишите админу @…», без прав доступа.
-
-## Потоки
-
-### Каталог
-1. User → «Каталог»
-2. Бот шлёт альбом фото (по 10 в группе) + сообщение с inline-кнопками
-3. Клик по кнопке → карточка товара (фото + действия)
-
-### Бронирование
-1. User → «Забронировать» на `available` товаре
-2. `bookings.status = pending`, `items.status = pending`
-3. Сообщение с инструкцией написать админу
-
-### Отмена пользователем
-1. User → «Отменить» на своей брони
-2. `bookings.status = cancelled`, `items.status = available`
-
-### Подтверждение админом
-1. Admin → «Ожидают» → выбор пользователя → корзина
-2. Confirm all / per item
-3. `bookings.status = confirmed`, `items.status = hidden`
-
-### Автоотмена
-1. Task каждые 5 мин: `expires_at < now` AND `status = pending`
-2. `bookings.status = expired`, `items.status = available`
-3. Уведомление пользователю
-
-## Callback data
-
-| Pattern | Действие |
-|---------|----------|
-| `item:{id}` | Карточка товара |
-| `book:{id}` | Забронировать |
-| `cancel:{booking_id}` | Отменить бронь |
-| `my_bookings` | Мои брони |
-| `admin:pending` | Список корзин |
-| `admin:cart:{user_id}` | Корзина пользователя |
-| `admin:confirm_all:{user_id}` | Подтвердить всё |
-| `admin:reject_all:{user_id}` | Отклонить всё |
-| `admin:confirm:{booking_id}:{user_id}` | Подтвердить товар |
-| `admin:reject:{booking_id}:{user_id}` | Отклонить товар |
-| `admin:user_add` / `admin:user_remove` | Whitelist FSM |
-| `super:admin_add` / `super:admin_remove` | Admins FSM (только супер) |
-
-## Доступ
-
-`AccessMiddleware` пропускает:
-- `user.id == SUPERUSER_ID` (супер)
-- username / user_id в таблице `admins`
-- `user.username` в whitelist (lowercase)
-
-Иначе — «Нет доступа».
-При апдейте от username из `admins` — привязка `user_id`.
-В инструкциях пользователям показывается `@MAINADMIN_USERNAME`.
+```
+BOT_TOKEN=
+SUPERUSER_ID=
+SUPERUSER_USERNAME=
+DB_PATH=data/blubot.db
+CART_TTL_MINUTES=20
+```
