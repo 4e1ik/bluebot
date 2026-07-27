@@ -10,6 +10,7 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS whitelist (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT NOT NULL UNIQUE,
+    user_id INTEGER UNIQUE,
     added_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -56,6 +57,21 @@ def normalize_username(username: str | None) -> str | None:
     return username.lstrip("@").lower()
 
 
+NEW_ITEM_DAYS = 7
+
+
+def is_new_item(created_at: str | None, days: int = NEW_ITEM_DAYS) -> bool:
+    if not created_at:
+        return False
+    try:
+        created = datetime.strptime(created_at[:19], "%Y-%m-%d %H:%M:%S").replace(
+            tzinfo=timezone.utc
+        )
+    except ValueError:
+        return False
+    return created > _now() - timedelta(days=days)
+
+
 class Database:
     def __init__(self, path: str) -> None:
         self.path = path
@@ -64,6 +80,12 @@ class Database:
         os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
         async with aiosqlite.connect(self.path) as db:
             await db.executescript(SCHEMA)
+            try:
+                await db.execute(
+                    "ALTER TABLE whitelist ADD COLUMN user_id INTEGER UNIQUE"
+                )
+            except aiosqlite.OperationalError:
+                pass
             await db.commit()
 
     async def is_whitelisted(self, username: str | None) -> bool:
@@ -109,6 +131,40 @@ class Database:
             )
             rows = await cur.fetchall()
             return [row[0] for row in rows]
+
+    async def bind_whitelist_user_id(self, username: str | None, user_id: int) -> None:
+        norm = normalize_username(username)
+        if not norm:
+            return
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                "UPDATE whitelist SET user_id = ? WHERE username = ?",
+                (user_id, norm),
+            )
+            await db.commit()
+
+    async def list_notify_user_ids(self) -> list[int]:
+        async with aiosqlite.connect(self.path) as db:
+            cur = await db.execute(
+                """
+                SELECT user_id FROM whitelist WHERE user_id IS NOT NULL
+                UNION
+                SELECT user_id FROM admins WHERE user_id IS NOT NULL
+                """
+            )
+            rows = await cur.fetchall()
+            return [row[0] for row in rows]
+
+    async def count_new_items(self, days: int = NEW_ITEM_DAYS) -> int:
+        cutoff = _fmt(_now() - timedelta(days=days))
+        async with aiosqlite.connect(self.path) as db:
+            cur = await db.execute(
+                "SELECT COUNT(*) FROM items "
+                "WHERE status IN ('available', 'pending') AND created_at > ?",
+                (cutoff,),
+            )
+            row = await cur.fetchone()
+            return int(row[0]) if row else 0
 
     async def is_admin_user(self, user_id: int, username: str | None = None) -> bool:
         norm = normalize_username(username)
@@ -177,6 +233,34 @@ class Database:
             )
             await db.commit()
             return cur.lastrowid
+
+    async def update_item_photo(self, item_id: int, photo_file_id: str) -> bool:
+        async with aiosqlite.connect(self.path) as db:
+            cur = await db.execute(
+                "UPDATE items SET photo_file_id = ? WHERE id = ? "
+                "AND status != 'hidden'",
+                (photo_file_id, item_id),
+            )
+            await db.commit()
+            return cur.rowcount > 0
+
+    async def update_item_name(self, item_id: int, name: str) -> bool:
+        async with aiosqlite.connect(self.path) as db:
+            cur = await db.execute(
+                "UPDATE items SET name = ? WHERE id = ? AND status != 'hidden'",
+                (name, item_id),
+            )
+            await db.commit()
+            return cur.rowcount > 0
+
+    async def update_item_price(self, item_id: int, price: float) -> bool:
+        async with aiosqlite.connect(self.path) as db:
+            cur = await db.execute(
+                "UPDATE items SET price = ? WHERE id = ? AND status != 'hidden'",
+                (price, item_id),
+            )
+            await db.commit()
+            return cur.rowcount > 0
 
     async def get_catalog_items(self) -> list[aiosqlite.Row]:
         async with aiosqlite.connect(self.path) as db:

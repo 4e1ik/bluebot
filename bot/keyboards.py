@@ -1,5 +1,7 @@
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
 
+from bot.db import is_new_item
+
 BUTTON_LABEL_MAX = 56
 
 
@@ -22,6 +24,7 @@ def main_menu_kb(is_admin: bool, is_super: bool = False) -> ReplyKeyboardMarkup:
                 KeyboardButton(text="Пользователи"),
             ]
         )
+        rows.append([KeyboardButton(text="Уведомить о новинках")])
     if is_super:
         rows.append([KeyboardButton(text="Админы")])
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
@@ -70,7 +73,10 @@ def catalog_kb(items: list) -> InlineKeyboardMarkup:
         status_mark = ""
         if item["status"] == "pending":
             status_mark = " 🔒"
-        label = _truncate(f"{item['name']} — {item['price']:.0f} Br{status_mark}")
+        new_mark = "🆕 " if is_new_item(item["created_at"]) else ""
+        label = _truncate(
+            f"{new_mark}{item['name']} — {item['price']:.0f} Br{status_mark}"
+        )
         buttons.append(
             [InlineKeyboardButton(text=label, callback_data=f"item:{item['id']}")]
         )
@@ -97,12 +103,38 @@ def item_kb(
         rows.append(
             [
                 InlineKeyboardButton(
+                    text="✏️ Изменить", callback_data=f"admin:edit:{item_id}"
+                ),
+                InlineKeyboardButton(
                     text="🗑 Удалить", callback_data=f"admin:delete_item:{item_id}"
-                )
+                ),
             ]
         )
     rows.append([InlineKeyboardButton(text="← Каталог", callback_data="catalog")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def edit_item_kb(item_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🖼 Фото", callback_data=f"admin:edit_photo:{item_id}"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="📝 Название", callback_data=f"admin:edit_name:{item_id}"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="💰 Цена", callback_data=f"admin:edit_price:{item_id}"
+                )
+            ],
+            [InlineKeyboardButton(text="← Назад", callback_data=f"item:{item_id}")],
+        ]
+    )
 
 
 def my_bookings_kb(bookings: list) -> InlineKeyboardMarkup:

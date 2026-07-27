@@ -3,14 +3,17 @@ from __future__ import annotations
 from aiogram import F, Router
 from aiogram.types import CallbackQuery, Message
 
-from bot.db import Database
+from bot.db import Database, is_new_item
 from bot.keyboards import catalog_kb, item_kb
 
 router = Router()
 
 
 def _item_caption(item, booking_user_id: int | None, current_user_id: int) -> str:
-    lines = [f"<b>{item['name']}</b>", f"Цена: {item['price']:.0f} Br"]
+    name = item["name"]
+    if is_new_item(item["created_at"]):
+        name = f"🆕 {name}"
+    lines = [f"<b>{name}</b>", f"Цена: {item['price']:.0f} Br"]
     if item["status"] == "pending":
         if booking_user_id == current_user_id:
             lines.append("\n🔒 Забронировано вами")

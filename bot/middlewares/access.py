@@ -24,8 +24,9 @@ class AccessMiddleware(BaseMiddleware):
 
         is_super = user.id == self.config.superuser_id
 
-        if not is_super and user.username:
+        if user.username:
             await self.db.bind_admin_user_id(user.username, user.id)
+            await self.db.bind_whitelist_user_id(user.username, user.id)
 
         is_admin = is_super or await self.db.is_admin_user(user.id, user.username)
         data["is_super"] = is_super

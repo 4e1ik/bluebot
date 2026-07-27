@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 
-from aiogram import F, Router
+from aiogram import Bot, F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -15,11 +15,13 @@ from bot.keyboards import (
     admins_kb,
     cancel_kb,
     catalog_kb,
+    edit_item_kb,
     main_menu_kb,
     pending_carts_kb,
     user_cart_kb,
     whitelist_kb,
 )
+from bot.notify import notify_users
 
 router = Router()
 router.include_router(admin_router)
@@ -29,6 +31,12 @@ USERNAME_RE = re.compile(r"^@?([A-Za-z0-9_]{5,32})$")
 
 
 class AddItem(StatesGroup):
+    photo = State()
+    name = State()
+    price = State()
+
+
+class EditItem(StatesGroup):
     photo = State()
     name = State()
     price = State()
@@ -130,6 +138,187 @@ async def delete_item(callback: CallbackQuery, db: Database) -> None:
     await callback.message.answer(
         "Товар удалён.\n\nКаталог:",
         reply_markup=catalog_kb(items),
+    )
+
+
+@admin_router.message(F.text == "Уведомить о новинках")
+async def notify_new_items(
+    message: Message, db: Database, bot: Bot, config: Config
+) -> None:
+    count = await db.count_new_items()
+    if count == 0:
+        await message.answer(
+            "Новых товаров (младше 7 дней) нет.",
+            protect_content=True,
+        )
+        return
+
+    user_ids = [
+        uid
+        for uid in await db.list_notify_user_ids()
+        if uid != config.superuser_id
+    ]
+    if not user_ids:
+        await message.answer(
+            "Некому отправить: нет пользователей/админов с известным user_id. "
+            "Пусть они хотя бы раз нажмут /start.",
+            protect_content=True,
+        )
+        return
+
+    text = (
+        "Появились новые позиции в каталоге.\n"
+        "Откройте «Каталог», чтобы посмотреть."
+    )
+    sent = await notify_users(bot, user_ids, text)
+    await message.answer(
+        f"Уведомление отправлено: {sent} из {len(user_ids)}.",
+        protect_content=True,
+    )
+
+
+@admin_router.callback_query(F.data.regexp(r"^admin:edit:\d+$"))
+async def edit_item_menu(callback: CallbackQuery, db: Database) -> None:
+    item_id = int(callback.data.split(":")[2])
+    item = await db.get_item(item_id)
+    if not item or item["status"] == "hidden":
+        await callback.answer("Товар не найден", show_alert=True)
+        return
+
+    await callback.answer()
+    try:
+        await callback.message.edit_caption(
+            caption=f"Что изменить у «{item['name']}»?",
+            reply_markup=edit_item_kb(item_id),
+        )
+    except Exception:
+        await callback.message.answer(
+            f"Что изменить у «{item['name']}»?",
+            reply_markup=edit_item_kb(item_id),
+            protect_content=True,
+        )
+
+
+@admin_router.callback_query(F.data.startswith("admin:edit_photo:"))
+async def edit_photo_start(callback: CallbackQuery, state: FSMContext) -> None:
+    item_id = int(callback.data.split(":")[2])
+    await state.set_state(EditItem.photo)
+    await state.update_data(edit_item_id=item_id)
+    await callback.answer()
+    await callback.message.answer(
+        "Отправьте новое фото (или «Отмена»):",
+        reply_markup=cancel_kb(),
+        protect_content=True,
+    )
+
+
+@admin_router.callback_query(F.data.startswith("admin:edit_name:"))
+async def edit_name_start(callback: CallbackQuery, state: FSMContext) -> None:
+    item_id = int(callback.data.split(":")[2])
+    await state.set_state(EditItem.name)
+    await state.update_data(edit_item_id=item_id)
+    await callback.answer()
+    await callback.message.answer(
+        "Введите новое название (или «Отмена»):",
+        reply_markup=cancel_kb(),
+        protect_content=True,
+    )
+
+
+@admin_router.callback_query(F.data.startswith("admin:edit_price:"))
+async def edit_price_start(callback: CallbackQuery, state: FSMContext) -> None:
+    item_id = int(callback.data.split(":")[2])
+    await state.set_state(EditItem.price)
+    await state.update_data(edit_item_id=item_id)
+    await callback.answer()
+    await callback.message.answer(
+        "Введите новую цену (или «Отмена»):",
+        reply_markup=cancel_kb(),
+        protect_content=True,
+    )
+
+
+@admin_router.message(EditItem.photo, F.photo)
+async def edit_photo_save(
+    message: Message,
+    state: FSMContext,
+    db: Database,
+    is_admin: bool = False,
+    is_super: bool = False,
+) -> None:
+    data = await state.get_data()
+    item_id = data.get("edit_item_id")
+    await state.clear()
+    ok = await db.update_item_photo(item_id, message.photo[-1].file_id)
+    text = "Фото обновлено." if ok else "Не удалось обновить фото."
+    await message.answer(
+        text,
+        reply_markup=main_menu_kb(is_admin, is_super),
+        protect_content=True,
+    )
+
+
+@admin_router.message(EditItem.photo)
+async def edit_photo_invalid(message: Message) -> None:
+    await message.answer(
+        "Нужно отправить фото или нажмите «Отмена».",
+        protect_content=True,
+    )
+
+
+@admin_router.message(EditItem.name, F.text, F.text != "Отмена")
+async def edit_name_save(
+    message: Message,
+    state: FSMContext,
+    db: Database,
+    is_admin: bool = False,
+    is_super: bool = False,
+) -> None:
+    name = (message.text or "").strip()
+    if not name:
+        await message.answer("Название не может быть пустым.", protect_content=True)
+        return
+    data = await state.get_data()
+    item_id = data.get("edit_item_id")
+    await state.clear()
+    ok = await db.update_item_name(item_id, name)
+    text = "Название обновлено." if ok else "Не удалось обновить название."
+    await message.answer(
+        text,
+        reply_markup=main_menu_kb(is_admin, is_super),
+        protect_content=True,
+    )
+
+
+@admin_router.message(EditItem.price, F.text, F.text != "Отмена")
+async def edit_price_save(
+    message: Message,
+    state: FSMContext,
+    db: Database,
+    is_admin: bool = False,
+    is_super: bool = False,
+) -> None:
+    raw = (message.text or "").strip().replace(",", ".")
+    try:
+        price = float(raw)
+        if price <= 0:
+            raise ValueError
+    except ValueError:
+        await message.answer(
+            "Введите корректную цену (положительное число).",
+            protect_content=True,
+        )
+        return
+
+    data = await state.get_data()
+    item_id = data.get("edit_item_id")
+    await state.clear()
+    ok = await db.update_item_price(item_id, price)
+    text = "Цена обновлена." if ok else "Не удалось обновить цену."
+    await message.answer(
+        text,
+        reply_markup=main_menu_kb(is_admin, is_super),
+        protect_content=True,
     )
 
 
