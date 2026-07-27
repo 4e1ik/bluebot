@@ -80,14 +80,17 @@ class Database:
         os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
         async with aiosqlite.connect(self.path) as db:
             await db.executescript(SCHEMA)
-            cur = await db.execute("PRAGMA table_info(whitelist)")
-            cols = {row[1] for row in await cur.fetchall()}
-            if "user_id" not in cols:
-                await db.execute("ALTER TABLE whitelist ADD COLUMN user_id INTEGER")
-                await db.execute(
-                    "CREATE UNIQUE INDEX IF NOT EXISTS "
-                    "idx_whitelist_user_id ON whitelist(user_id)"
-                )
+            for table in ("whitelist", "admins"):
+                cur = await db.execute(f"PRAGMA table_info({table})")
+                cols = {row[1] for row in await cur.fetchall()}
+                if "user_id" not in cols:
+                    await db.execute(
+                        f"ALTER TABLE {table} ADD COLUMN user_id INTEGER"
+                    )
+                    await db.execute(
+                        f"CREATE UNIQUE INDEX IF NOT EXISTS "
+                        f"idx_{table}_user_id ON {table}(user_id)"
+                    )
             await db.commit()
 
     async def is_whitelisted(self, username: str | None) -> bool:
