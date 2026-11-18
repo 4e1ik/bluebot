@@ -21,13 +21,31 @@ CREATE TABLE IF NOT EXISTS admins (
     added_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS categories (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS subcategories (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    category_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (category_id) REFERENCES categories(id)
+);
+
 CREATE TABLE IF NOT EXISTS items (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
     price REAL NOT NULL,
     photo_file_id TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'available',
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    category_id INTEGER,
+    subcategory_id INTEGER,
+    FOREIGN KEY (category_id) REFERENCES categories(id),
+    FOREIGN KEY (subcategory_id) REFERENCES subcategories(id)
 );
 
 CREATE TABLE IF NOT EXISTS bookings (
@@ -58,6 +76,35 @@ def normalize_username(username: str | None) -> str | None:
 
 
 NEW_ITEM_DAYS = 7
+
+_ITEM_WITH_PLACEMENT = """
+SELECT
+    i.id,
+    i.name,
+    i.price,
+    i.photo_file_id,
+    i.status,
+    i.created_at,
+    i.category_id,
+    i.subcategory_id,
+    c.name AS category_name,
+    sc.name AS subcategory_name,
+    sc.category_id AS parent_category_id,
+    pc.name AS parent_category_name
+FROM items i
+LEFT JOIN categories c ON c.id = i.category_id
+LEFT JOIN subcategories sc ON sc.id = i.subcategory_id
+LEFT JOIN categories pc ON pc.id = sc.category_id
+"""
+
+
+def _clean_name(name: str) -> str | None:
+    cleaned = name.strip()
+    return cleaned or None
+
+
+def _by_name(rows: list[aiosqlite.Row]) -> list[aiosqlite.Row]:
+    return sorted(rows, key=lambda row: (row["name"].casefold(), row["id"]))
 
 
 def is_new_item(created_at: str | None, days: int = NEW_ITEM_DAYS) -> bool:
@@ -91,6 +138,14 @@ class Database:
                         f"CREATE UNIQUE INDEX IF NOT EXISTS "
                         f"idx_{table}_user_id ON {table}(user_id)"
                     )
+            cur = await db.execute("PRAGMA table_info(items)")
+            item_cols = {row[1] for row in await cur.fetchall()}
+            if "category_id" not in item_cols:
+                await db.execute("ALTER TABLE items ADD COLUMN category_id INTEGER")
+            if "subcategory_id" not in item_cols:
+                await db.execute(
+                    "ALTER TABLE items ADD COLUMN subcategory_id INTEGER"
+                )
             await db.commit()
 
     async def is_whitelisted(self, username: str | None) -> bool:
@@ -230,12 +285,41 @@ class Database:
             rows = await cur.fetchall()
             return [row[0] for row in rows]
 
-    async def create_item(self, name: str, price: float, photo_file_id: str) -> int:
+    async def create_item(
+        self,
+        name: str,
+        price: float,
+        photo_file_id: str,
+        *,
+        category_id: int | None = None,
+        subcategory_id: int | None = None,
+    ) -> int | None:
+        if (category_id is None) == (subcategory_id is None):
+            return None
         async with aiosqlite.connect(self.path) as db:
-            cur = await db.execute(
-                "INSERT INTO items (name, price, photo_file_id) VALUES (?, ?, ?)",
-                (name, price, photo_file_id),
-            )
+            if category_id is not None:
+                cur = await db.execute(
+                    "SELECT 1 FROM categories WHERE id = ?", (category_id,)
+                )
+                if await cur.fetchone() is None:
+                    return None
+                cur = await db.execute(
+                    "INSERT INTO items (name, price, photo_file_id, category_id) "
+                    "VALUES (?, ?, ?, ?)",
+                    (name, price, photo_file_id, category_id),
+                )
+            else:
+                cur = await db.execute(
+                    "SELECT 1 FROM subcategories WHERE id = ?", (subcategory_id,)
+                )
+                if await cur.fetchone() is None:
+                    return None
+                cur = await db.execute(
+                    "INSERT INTO items "
+                    "(name, price, photo_file_id, subcategory_id) "
+                    "VALUES (?, ?, ?, ?)",
+                    (name, price, photo_file_id, subcategory_id),
+                )
             await db.commit()
             return cur.lastrowid
 
@@ -267,6 +351,231 @@ class Database:
             await db.commit()
             return cur.rowcount > 0
 
+    async def create_category(self, name: str) -> int | None:
+        cleaned = _clean_name(name)
+        if not cleaned:
+            return None
+        async with aiosqlite.connect(self.path) as db:
+            cur = await db.execute(
+                "INSERT INTO categories (name) VALUES (?)", (cleaned,)
+            )
+            await db.commit()
+            return cur.lastrowid
+
+    async def list_categories(self) -> list[aiosqlite.Row]:
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute("SELECT * FROM categories")
+            return _by_name(await cur.fetchall())
+
+    async def get_category(self, category_id: int) -> aiosqlite.Row | None:
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                "SELECT * FROM categories WHERE id = ?", (category_id,)
+            )
+            return await cur.fetchone()
+
+    async def rename_category(self, category_id: int, name: str) -> bool:
+        cleaned = _clean_name(name)
+        if not cleaned:
+            return False
+        async with aiosqlite.connect(self.path) as db:
+            cur = await db.execute(
+                "UPDATE categories SET name = ? WHERE id = ?",
+                (cleaned, category_id),
+            )
+            await db.commit()
+            return cur.rowcount > 0
+
+    async def create_subcategory(self, category_id: int, name: str) -> int | None:
+        cleaned = _clean_name(name)
+        if not cleaned:
+            return None
+        async with aiosqlite.connect(self.path) as db:
+            cur = await db.execute(
+                "SELECT 1 FROM categories WHERE id = ?", (category_id,)
+            )
+            if await cur.fetchone() is None:
+                return None
+            cur = await db.execute(
+                "INSERT INTO subcategories (category_id, name) VALUES (?, ?)",
+                (category_id, cleaned),
+            )
+            await db.commit()
+            return cur.lastrowid
+
+    async def list_subcategories(self, category_id: int) -> list[aiosqlite.Row]:
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                "SELECT * FROM subcategories WHERE category_id = ?",
+                (category_id,),
+            )
+            return _by_name(await cur.fetchall())
+
+    async def get_subcategory(self, subcategory_id: int) -> aiosqlite.Row | None:
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                "SELECT * FROM subcategories WHERE id = ?", (subcategory_id,)
+            )
+            return await cur.fetchone()
+
+    async def rename_subcategory(self, subcategory_id: int, name: str) -> bool:
+        cleaned = _clean_name(name)
+        if not cleaned:
+            return False
+        async with aiosqlite.connect(self.path) as db:
+            cur = await db.execute(
+                "UPDATE subcategories SET name = ? WHERE id = ?",
+                (cleaned, subcategory_id),
+            )
+            await db.commit()
+            return cur.rowcount > 0
+
+    async def rebind_subcategory(
+        self, subcategory_id: int, category_id: int
+    ) -> str:
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                "SELECT * FROM subcategories WHERE id = ?", (subcategory_id,)
+            )
+            sub = await cur.fetchone()
+            if sub is None:
+                return "missing"
+            if sub["category_id"] == category_id:
+                return "same"
+            cur = await db.execute(
+                "SELECT 1 FROM categories WHERE id = ?", (category_id,)
+            )
+            if await cur.fetchone() is None:
+                return "bad_parent"
+            await db.execute(
+                "UPDATE subcategories SET category_id = ? WHERE id = ?",
+                (category_id, subcategory_id),
+            )
+            await db.commit()
+            return "ok"
+
+    async def assign_item(
+        self,
+        item_id: int,
+        *,
+        category_id: int | None = None,
+        subcategory_id: int | None = None,
+    ) -> str:
+        if (category_id is None) == (subcategory_id is None):
+            return "invalid"
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute("SELECT * FROM items WHERE id = ?", (item_id,))
+            item = await cur.fetchone()
+            if item is None:
+                return "missing"
+            if item["status"] == "hidden":
+                return "hidden"
+            if category_id is not None:
+                cur = await db.execute(
+                    "SELECT 1 FROM categories WHERE id = ?", (category_id,)
+                )
+                if await cur.fetchone() is None:
+                    return "bad_target"
+                if item["category_id"] == category_id and item["subcategory_id"] is None:
+                    return "same"
+                await db.execute(
+                    "UPDATE items SET category_id = ?, subcategory_id = NULL "
+                    "WHERE id = ?",
+                    (category_id, item_id),
+                )
+            else:
+                cur = await db.execute(
+                    "SELECT 1 FROM subcategories WHERE id = ?",
+                    (subcategory_id,),
+                )
+                if await cur.fetchone() is None:
+                    return "bad_target"
+                if (
+                    item["subcategory_id"] == subcategory_id
+                    and item["category_id"] is None
+                ):
+                    return "same"
+                await db.execute(
+                    "UPDATE items SET category_id = NULL, subcategory_id = ? "
+                    "WHERE id = ?",
+                    (subcategory_id, item_id),
+                )
+            await db.commit()
+            return "ok"
+
+    async def list_direct_items(self, category_id: int) -> list[aiosqlite.Row]:
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                "SELECT * FROM items WHERE category_id = ? "
+                "AND subcategory_id IS NULL "
+                "AND status IN ('available', 'pending') "
+                "ORDER BY created_at DESC",
+                (category_id,),
+            )
+            return await cur.fetchall()
+
+    async def list_subcategory_items(self, subcategory_id: int) -> list[aiosqlite.Row]:
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                "SELECT * FROM items WHERE subcategory_id = ? "
+                "AND status IN ('available', 'pending') "
+                "ORDER BY created_at DESC",
+                (subcategory_id,),
+            )
+            return await cur.fetchall()
+
+    async def list_visible_placements(self) -> list[aiosqlite.Row]:
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                """
+                SELECT i.category_id,
+                       i.subcategory_id,
+                       i.created_at,
+                       sc.category_id AS parent_category_id
+                FROM items i
+                LEFT JOIN subcategories sc ON sc.id = i.subcategory_id
+                WHERE i.status IN ('available', 'pending')
+                  AND (i.category_id IS NOT NULL OR i.subcategory_id IS NOT NULL)
+                """
+            )
+            return await cur.fetchall()
+
+    async def list_uncategorized_items(self) -> list[aiosqlite.Row]:
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                "SELECT * FROM items WHERE category_id IS NULL "
+                "AND subcategory_id IS NULL "
+                "AND status IN ('available', 'pending') "
+                "ORDER BY created_at DESC"
+            )
+            return await cur.fetchall()
+
+    async def count_subcategories(self) -> int:
+        async with aiosqlite.connect(self.path) as db:
+            cur = await db.execute("SELECT COUNT(*) FROM subcategories")
+            row = await cur.fetchone()
+            return int(row[0]) if row else 0
+
+    async def count_visible_uncategorized(self) -> int:
+        async with aiosqlite.connect(self.path) as db:
+            cur = await db.execute(
+                "SELECT COUNT(*) FROM items WHERE category_id IS NULL "
+                "AND subcategory_id IS NULL "
+                "AND status IN ('available', 'pending')"
+            )
+            row = await cur.fetchone()
+            return int(row[0]) if row else 0
+
     async def get_catalog_items(self) -> list[aiosqlite.Row]:
         async with aiosqlite.connect(self.path) as db:
             db.row_factory = aiosqlite.Row
@@ -279,7 +588,9 @@ class Database:
     async def get_item(self, item_id: int) -> aiosqlite.Row | None:
         async with aiosqlite.connect(self.path) as db:
             db.row_factory = aiosqlite.Row
-            cur = await db.execute("SELECT * FROM items WHERE id = ?", (item_id,))
+            cur = await db.execute(
+                f"{_ITEM_WITH_PLACEMENT} WHERE i.id = ?", (item_id,)
+            )
             return await cur.fetchone()
 
     async def delete_item(self, item_id: int) -> bool:

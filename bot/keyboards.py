@@ -17,7 +17,12 @@ def main_menu_kb(is_admin: bool, is_super: bool = False) -> ReplyKeyboardMarkup:
         [KeyboardButton(text="Помощь")],
     ]
     if is_admin:
-        rows.append([KeyboardButton(text="Добавить товар")])
+        rows.append(
+            [
+                KeyboardButton(text="Добавить товар"),
+                KeyboardButton(text="Категории"),
+            ]
+        )
         rows.append(
             [
                 KeyboardButton(text="Ожидают подтверждения"),
@@ -67,28 +72,213 @@ def admins_kb() -> InlineKeyboardMarkup:
     )
 
 
-def catalog_kb(items: list) -> InlineKeyboardMarkup:
-    buttons = []
-    for item in items:
-        status_mark = ""
-        if item["status"] == "pending":
-            status_mark = " 🔒"
-        new_mark = "🆕 " if is_new_item(item["created_at"]) else ""
-        label = _truncate(
-            f"{new_mark}{item['name']} — {item['price']:.0f} Br{status_mark}"
+def _item_button(item) -> InlineKeyboardButton:
+    status_mark = " 🔒" if item["status"] == "pending" else ""
+    new_mark = "🆕 " if is_new_item(item["created_at"]) else ""
+    label = _truncate(
+        f"{new_mark}{item['name']} — {item['price']:.0f} Br{status_mark}"
+    )
+    return InlineKeyboardButton(text=label, callback_data=f"item:{item['id']}")
+
+
+def _new_prefix(record) -> str:
+    try:
+        is_new = record["is_new"]
+    except (KeyError, IndexError, TypeError):
+        return ""
+    return "🆕 " if is_new else ""
+
+
+def catalog_root_kb(categories: list, show_uncategorized: bool) -> InlineKeyboardMarkup:
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=_truncate(f"{_new_prefix(category)}{category['name']}"),
+                callback_data=f"catalog:cat:{category['id']}",
+            )
+        ]
+        for category in categories
+    ]
+    if show_uncategorized:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="Без категории", callback_data="catalog:none"
+                )
+            ]
         )
-        buttons.append(
-            [InlineKeyboardButton(text=label, callback_data=f"item:{item['id']}")]
-        )
-    if not buttons:
-        buttons.append(
-            [InlineKeyboardButton(text="Каталог пуст", callback_data="noop")]
-        )
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
+    if not rows:
+        rows.append([InlineKeyboardButton(text="Каталог пуст", callback_data="noop")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def category_browse_kb(subcategories: list, items: list) -> InlineKeyboardMarkup:
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=_truncate(f"{_new_prefix(sub)}{sub['name']}"),
+                callback_data=f"catalog:sub:{sub['id']}",
+            )
+        ]
+        for sub in subcategories
+    ]
+    rows.extend([_item_button(item)] for item in items)
+    rows.append([InlineKeyboardButton(text="← Каталог", callback_data="catalog")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def subcategory_browse_kb(
+    parent_category_id: int, items: list
+) -> InlineKeyboardMarkup:
+    rows = [[_item_button(item)] for item in items]
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="← Назад",
+                callback_data=f"catalog:cat:{parent_category_id}",
+            )
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def uncategorized_browse_kb(items: list) -> InlineKeyboardMarkup:
+    rows = [[_item_button(item)] for item in items]
+    rows.append([InlineKeyboardButton(text="← Каталог", callback_data="catalog")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def categories_menu_kb(categories: list) -> InlineKeyboardMarkup:
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=_truncate(category["name"]),
+                callback_data=f"admin:cat:open:{category['id']}",
+            )
+        ]
+        for category in categories
+    ]
+    rows.append(
+        [
+            InlineKeyboardButton(text="➕ Категория", callback_data="admin:cat:new"),
+            InlineKeyboardButton(
+                text="➕ Подкатегория", callback_data="admin:sub:new"
+            ),
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def category_manage_kb(category_id: int, subcategories: list) -> InlineKeyboardMarkup:
+    rows = [
+        [
+            InlineKeyboardButton(
+                text="✏️ Название",
+                callback_data=f"admin:cat:rename:{category_id}",
+            )
+        ]
+    ]
+    rows.extend(
+        [
+            InlineKeyboardButton(
+                text=_truncate(sub["name"]),
+                callback_data=f"admin:sub:open:{sub['id']}",
+            )
+        ]
+        for sub in subcategories
+    )
+    rows.append([InlineKeyboardButton(text="← Категории", callback_data="admin:cats")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def subcategory_manage_kb(
+    subcategory_id: int, parent_category_id: int
+) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✏️ Название",
+                    callback_data=f"admin:sub:rename:{subcategory_id}",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🔗 Перепривязать",
+                    callback_data=f"admin:sub:rebind:{subcategory_id}",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="← Назад",
+                    callback_data=f"admin:cat:open:{parent_category_id}",
+                )
+            ],
+        ]
+    )
+
+
+def pick_rows(records: list, callback_prefix: str, back: str) -> InlineKeyboardMarkup:
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=_truncate(record["name"]),
+                callback_data=f"{callback_prefix}:{record['id']}",
+            )
+        ]
+        for record in records
+    ]
+    rows.append([InlineKeyboardButton(text="← Назад", callback_data=back)])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def add_place_kind_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="К категории", callback_data="admin:add:kind:cat"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="К подкатегории", callback_data="admin:add:kind:sub"
+                )
+            ],
+        ]
+    )
+
+
+def place_kind_kb(item_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="К категории",
+                    callback_data=f"admin:place:cat:{item_id}",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="К подкатегории",
+                    callback_data=f"admin:place:sub:{item_id}",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="← Назад", callback_data=f"admin:edit:{item_id}"
+                )
+            ],
+        ]
+    )
 
 
 def item_kb(
-    item_id: int, status: str, is_own: bool, is_admin: bool = False
+    item_id: int,
+    status: str,
+    is_own: bool,
+    is_admin: bool = False,
+    back_callback: str = "catalog",
 ) -> InlineKeyboardMarkup:
     rows = []
     if status == "available":
@@ -110,7 +300,9 @@ def item_kb(
                 ),
             ]
         )
-    rows.append([InlineKeyboardButton(text="← Каталог", callback_data="catalog")])
+    rows.append(
+        [InlineKeyboardButton(text="← Назад", callback_data=back_callback)]
+    )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -130,6 +322,11 @@ def edit_item_kb(item_id: int) -> InlineKeyboardMarkup:
             [
                 InlineKeyboardButton(
                     text="💰 Цена", callback_data=f"admin:edit_price:{item_id}"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="📂 Привязка", callback_data=f"admin:edit_place:{item_id}"
                 )
             ],
             [InlineKeyboardButton(text="← Назад", callback_data=f"item:{item_id}")],

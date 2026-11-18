@@ -14,6 +14,7 @@ bot/
 ├── main.py              # entry point, protect_content default
 ├── config.py            # SUPERUSER_*, CART_TTL_MINUTES
 ├── db.py
+├── catalog_nav.py       # дерево каталога и подпись привязки
 ├── notify.py            # notify_admins (без супера)
 ├── filters.py
 ├── keyboards.py
@@ -21,6 +22,7 @@ bot/
 ├── handlers/
 │   ├── common.py        # /start, Помощь
 │   ├── catalog.py
+│   ├── categories.py    # категории и подкатегории
 │   ├── booking.py       # корзина, оформить/очистить
 │   └── admin.py
 └── tasks/expiry.py      # 20 мин pending → expired
@@ -33,7 +35,7 @@ bot/
 
 ## Каталог
 
-Список кнопок → клик → фото карточки. Альбома нет.
+Корень категорий → категория или «Без категории» → подкатегория → фото карточки. Альбома нет.
 
 ## Уведомления
 

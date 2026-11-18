@@ -3,7 +3,8 @@ from aiogram.types import CallbackQuery, Message
 
 from bot.config import Config
 from bot.db import Database
-from bot.keyboards import catalog_kb, my_bookings_kb
+from bot.catalog_nav import root_screen
+from bot.keyboards import my_bookings_kb
 from bot.notify import notify_admins
 
 router = Router()
@@ -166,10 +167,10 @@ async def cancel_booking_by_item(callback: CallbackQuery, db: Database) -> None:
         return
 
     await callback.answer("Бронь снята")
-    items = await db.get_catalog_items()
+    text, markup = await root_screen(db)
     await callback.message.delete()
     await callback.message.answer(
-        "Бронь снята. Товар снова доступен.",
-        reply_markup=catalog_kb(items),
+        f"Бронь снята. Товар снова доступен.\n\n{text}",
+        reply_markup=markup,
         protect_content=True,
     )

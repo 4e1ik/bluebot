@@ -11,13 +11,16 @@ from aiogram.types import CallbackQuery, Message
 from bot.config import Config
 from bot.db import Database, normalize_username
 from bot.filters import admin_router, super_router
+from bot.catalog_nav import placement_line, root_screen
 from bot.keyboards import (
+    add_place_kind_kb,
     admins_kb,
     cancel_kb,
-    catalog_kb,
     edit_item_kb,
     main_menu_kb,
     pending_carts_kb,
+    pick_rows,
+    place_kind_kb,
     user_cart_kb,
     whitelist_kb,
 )
@@ -34,6 +37,7 @@ class AddItem(StatesGroup):
     photo = State()
     name = State()
     price = State()
+    place = State()
 
 
 class EditItem(StatesGroup):
@@ -115,7 +119,20 @@ async def cancel_fsm(
 
 
 @admin_router.message(F.text == "Добавить товар")
-async def add_item_start(message: Message, state: FSMContext) -> None:
+async def add_item_start(
+    message: Message,
+    state: FSMContext,
+    db: Database,
+    is_admin: bool = False,
+    is_super: bool = False,
+) -> None:
+    if not await db.list_categories():
+        await message.answer(
+            "Сначала создайте категорию.",
+            reply_markup=main_menu_kb(is_admin, is_super),
+            protect_content=True,
+        )
+        return
     await state.set_state(AddItem.photo)
     await message.answer(
         "Отправьте фото товара (или «Отмена»):",
@@ -134,10 +151,10 @@ async def delete_item(callback: CallbackQuery, db: Database) -> None:
 
     await callback.answer("Удалено")
     await callback.message.delete()
-    items = await db.get_catalog_items()
+    text, markup = await root_screen(db)
     await callback.message.answer(
-        "Товар удалён.\n\nКаталог:",
-        reply_markup=catalog_kb(items),
+        f"Товар удалён.\n\n{text}",
+        reply_markup=markup,
     )
 
 
@@ -188,12 +205,14 @@ async def edit_item_menu(callback: CallbackQuery, db: Database) -> None:
     await callback.answer()
     try:
         await callback.message.edit_caption(
-            caption=f"Что изменить у «{item['name']}»?",
+            caption=(
+                f"Что изменить у «{item['name']}»?\n{placement_line(item)}"
+            ),
             reply_markup=edit_item_kb(item_id),
         )
     except Exception:
         await callback.message.answer(
-            f"Что изменить у «{item['name']}»?",
+            f"Что изменить у «{item['name']}»?\n{placement_line(item)}",
             reply_markup=edit_item_kb(item_id),
             protect_content=True,
         )
@@ -358,13 +377,7 @@ async def add_item_name(message: Message, state: FSMContext) -> None:
 
 
 @admin_router.message(AddItem.price, F.text, F.text != "Отмена")
-async def add_item_price(
-    message: Message,
-    state: FSMContext,
-    db: Database,
-    is_admin: bool = False,
-    is_super: bool = False,
-) -> None:
+async def add_item_price(message: Message, state: FSMContext) -> None:
     text = message.text.strip().replace(",", ".")
     try:
         price = float(text)
@@ -377,14 +390,257 @@ async def add_item_price(
         )
         return
 
-    data = await state.get_data()
-    item_id = await db.create_item(data["name"], price, data["photo_file_id"])
-    await state.clear()
+    await state.update_data(price=price)
+    await state.set_state(AddItem.place)
     await message.answer(
-        f"Товар добавлен (id={item_id}).",
+        "Куда отнести товар?",
+        reply_markup=add_place_kind_kb(),
+        protect_content=True,
+    )
+
+
+@admin_router.message(AddItem.place, F.text, F.text != "Отмена")
+async def add_place_need_button(message: Message) -> None:
+    await message.answer(
+        "Выберите категорию или подкатегорию кнопкой.",
+        protect_content=True,
+    )
+
+
+async def _save_new_item(
+    callback: CallbackQuery,
+    state: FSMContext,
+    db: Database,
+    *,
+    category_id: int | None = None,
+    subcategory_id: int | None = None,
+    is_admin: bool = False,
+    is_super: bool = False,
+) -> None:
+    data = await state.get_data()
+    item_id = await db.create_item(
+        data["name"],
+        data["price"],
+        data["photo_file_id"],
+        category_id=category_id,
+        subcategory_id=subcategory_id,
+    )
+    if item_id is None:
+        await callback.answer("Не удалось сохранить товар", show_alert=True)
+        return
+    await state.clear()
+    item = await db.get_item(item_id)
+    await callback.message.answer(
+        f"Товар добавлен (id={item_id}).\n{placement_line(item)}",
         reply_markup=main_menu_kb(is_admin, is_super),
         protect_content=True,
     )
+    await callback.answer("Товар добавлен")
+
+
+@admin_router.callback_query(AddItem.place, F.data == "admin:add:back")
+async def add_place_back(callback: CallbackQuery) -> None:
+    await callback.message.edit_text(
+        "Куда отнести товар?", reply_markup=add_place_kind_kb()
+    )
+    await callback.answer()
+
+
+@admin_router.callback_query(AddItem.place, F.data == "admin:add:kind:cat")
+async def add_choose_category(callback: CallbackQuery, db: Database) -> None:
+    categories = await db.list_categories()
+    if not categories:
+        await callback.answer("Сначала создайте категорию", show_alert=True)
+        return
+    await callback.message.edit_text(
+        "Выберите категорию:",
+        reply_markup=pick_rows(categories, "admin:add:setcat", "admin:add:back"),
+    )
+    await callback.answer()
+
+
+@admin_router.callback_query(AddItem.place, F.data == "admin:add:kind:sub")
+async def add_choose_subcategory_parent(
+    callback: CallbackQuery, db: Database
+) -> None:
+    if await db.count_subcategories() == 0:
+        await callback.answer("Подкатегорий пока нет", show_alert=True)
+        return
+    categories = await db.list_categories()
+    await callback.message.edit_text(
+        "Выберите категорию, затем подкатегорию:",
+        reply_markup=pick_rows(categories, "admin:add:picksub", "admin:add:back"),
+    )
+    await callback.answer()
+
+
+@admin_router.callback_query(AddItem.place, F.data.startswith("admin:add:picksub:"))
+async def add_choose_subcategory(callback: CallbackQuery, db: Database) -> None:
+    category_id = int(callback.data.split(":")[3])
+    subs = await db.list_subcategories(category_id)
+    if not subs:
+        await callback.answer("В этой категории нет подкатегорий", show_alert=True)
+        return
+    await callback.message.edit_text(
+        "Выберите подкатегорию:",
+        reply_markup=pick_rows(subs, "admin:add:setsub", "admin:add:kind:sub"),
+    )
+    await callback.answer()
+
+
+@admin_router.callback_query(AddItem.place, F.data.startswith("admin:add:setcat:"))
+async def add_set_category(
+    callback: CallbackQuery,
+    state: FSMContext,
+    db: Database,
+    is_admin: bool = False,
+    is_super: bool = False,
+) -> None:
+    category_id = int(callback.data.split(":")[3])
+    await _save_new_item(
+        callback,
+        state,
+        db,
+        category_id=category_id,
+        is_admin=is_admin,
+        is_super=is_super,
+    )
+
+
+@admin_router.callback_query(AddItem.place, F.data.startswith("admin:add:setsub:"))
+async def add_set_subcategory(
+    callback: CallbackQuery,
+    state: FSMContext,
+    db: Database,
+    is_admin: bool = False,
+    is_super: bool = False,
+) -> None:
+    subcategory_id = int(callback.data.split(":")[3])
+    await _save_new_item(
+        callback,
+        state,
+        db,
+        subcategory_id=subcategory_id,
+        is_admin=is_admin,
+        is_super=is_super,
+    )
+
+
+async def _refresh_edit_menu(callback: CallbackQuery, item) -> None:
+    caption = f"Что изменить у «{item['name']}»?\n{placement_line(item)}"
+    try:
+        await callback.message.edit_caption(
+            caption=caption,
+            reply_markup=edit_item_kb(item["id"]),
+        )
+    except Exception:
+        await callback.message.answer(
+            caption,
+            reply_markup=edit_item_kb(item["id"]),
+            protect_content=True,
+        )
+
+
+@admin_router.callback_query(F.data.startswith("admin:edit_place:"))
+async def edit_place_menu(callback: CallbackQuery, db: Database) -> None:
+    item_id = int(callback.data.split(":")[2])
+    item = await db.get_item(item_id)
+    if not item or item["status"] == "hidden":
+        await callback.answer("Товар не найден", show_alert=True)
+        return
+    caption = f"Куда перепривязать «{item['name']}»?\n{placement_line(item)}"
+    try:
+        await callback.message.edit_caption(
+            caption=caption, reply_markup=place_kind_kb(item_id)
+        )
+    except Exception:
+        await callback.message.answer(
+            caption, reply_markup=place_kind_kb(item_id), protect_content=True
+        )
+    await callback.answer()
+
+
+@admin_router.callback_query(F.data.startswith("admin:place:cat:"))
+async def edit_place_categories(callback: CallbackQuery, db: Database) -> None:
+    item_id = int(callback.data.split(":")[3])
+    categories = await db.list_categories()
+    if not categories:
+        await callback.answer("Сначала создайте категорию", show_alert=True)
+        return
+    await callback.message.edit_caption(
+        caption="Выберите категорию:",
+        reply_markup=pick_rows(
+            categories, f"admin:place:setcat:{item_id}", f"admin:edit_place:{item_id}"
+        ),
+    )
+    await callback.answer()
+
+
+@admin_router.callback_query(F.data.startswith("admin:place:sub:"))
+async def edit_place_sub_parents(callback: CallbackQuery, db: Database) -> None:
+    item_id = int(callback.data.split(":")[3])
+    if await db.count_subcategories() == 0:
+        await callback.answer("Подкатегорий пока нет", show_alert=True)
+        return
+    categories = await db.list_categories()
+    await callback.message.edit_caption(
+        caption="Выберите категорию, затем подкатегорию:",
+        reply_markup=pick_rows(
+            categories,
+            f"admin:place:picksub:{item_id}",
+            f"admin:edit_place:{item_id}",
+        ),
+    )
+    await callback.answer()
+
+
+@admin_router.callback_query(F.data.startswith("admin:place:picksub:"))
+async def edit_place_subs(callback: CallbackQuery, db: Database) -> None:
+    _, _, _, item_id, category_id = callback.data.split(":")
+    subs = await db.list_subcategories(int(category_id))
+    if not subs:
+        await callback.answer("В этой категории нет подкатегорий", show_alert=True)
+        return
+    await callback.message.edit_caption(
+        caption="Выберите подкатегорию:",
+        reply_markup=pick_rows(
+            subs,
+            f"admin:place:setsub:{item_id}",
+            f"admin:place:sub:{item_id}",
+        ),
+    )
+    await callback.answer()
+
+
+@admin_router.callback_query(F.data.startswith("admin:place:setcat:"))
+async def edit_place_set_category(callback: CallbackQuery, db: Database) -> None:
+    _, _, _, item_id, category_id = callback.data.split(":")
+    result = await db.assign_item(int(item_id), category_id=int(category_id))
+    if result == "same":
+        await callback.answer("Уже относится сюда", show_alert=True)
+        return
+    if result != "ok":
+        await callback.answer("Не удалось перепривязать", show_alert=True)
+        return
+    item = await db.get_item(int(item_id))
+    await _refresh_edit_menu(callback, item)
+    await callback.answer("Привязка обновлена")
+
+
+@admin_router.callback_query(F.data.startswith("admin:place:setsub:"))
+async def edit_place_set_subcategory(callback: CallbackQuery, db: Database) -> None:
+    _, _, _, item_id, subcategory_id = callback.data.split(":")
+    result = await db.assign_item(int(item_id), subcategory_id=int(subcategory_id))
+    if result == "same":
+        await callback.answer("Уже относится сюда", show_alert=True)
+        return
+    if result != "ok":
+        await callback.answer("Не удалось перепривязать", show_alert=True)
+        return
+    item = await db.get_item(int(item_id))
+    await _refresh_edit_menu(callback, item)
+    await callback.answer("Привязка обновлена")
+
 
 @admin_router.message(F.text == "Ожидают подтверждения")
 async def pending_list(message: Message, db: Database) -> None:
@@ -733,3 +989,6 @@ async def admin_manage_username(
         parse_mode="HTML",
         protect_content=True,
     )
+
+
+import bot.handlers.categories  # noqa: F401, E402  registers category handlers
