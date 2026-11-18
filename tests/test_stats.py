@@ -78,14 +78,15 @@ class StatsTests(unittest.IsolatedAsyncioTestCase):
 
         orders = await build_report(self.db, "orders", now=NOW)
         products = await build_report(self.db, "products", now=NOW)
-        self.assertEqual(_window(orders, "7 суток").count, 0)
-        self.assertEqual(_window(orders, "7 суток").total, 0)
-        self.assertEqual(_window(orders, "14 суток").count, 1)
-        self.assertEqual(_window(orders, "14 суток").total, 120)
-        self.assertEqual(_window(products, "7 суток").count, 1)
-        self.assertEqual(_window(products, "7 суток").total, 70)
-        self.assertEqual(_window(products, "14 суток").count, 2)
-        self.assertEqual(_window(products, "14 суток").total, 120)
+        self.assertEqual(_window(orders, "Неделя").count, 0)
+        self.assertEqual(_window(orders, "2 недели").count, 0)
+        self.assertEqual(_window(orders, "Месяц").count, 1)
+        self.assertEqual(_window(orders, "Месяц").total, 120)
+        self.assertEqual(_window(products, "Неделя").count, 1)
+        self.assertEqual(_window(products, "Неделя").total, 70)
+        self.assertEqual(_window(products, "2 недели").total, 70)
+        self.assertEqual(_window(products, "Месяц").count, 2)
+        self.assertEqual(_window(products, "Месяц").total, 120)
 
     async def test_today_uses_minsk_midnight_and_rejection_is_excluded(self) -> None:
         fruit = await self.db.create_category("Фрукты")
@@ -103,8 +104,8 @@ class StatsTests(unittest.IsolatedAsyncioTestCase):
         orders = await build_report(self.db, "orders", now=NOW)
         self.assertEqual(_window(orders, "Сегодня").count, 1)
         self.assertEqual(_window(orders, "Сегодня").total, 10)
-        self.assertEqual(_window(orders, "7 суток").count, 3)
-        self.assertEqual(_window(orders, "7 суток").total, 21)
+        self.assertEqual(_window(orders, "Неделя").count, 3)
+        self.assertEqual(_window(orders, "Неделя").total, 21)
         self.assertNotIn("100", format_report(orders))
 
     async def test_category_sums_match_and_products_use_their_own_time(self) -> None:
@@ -135,7 +136,7 @@ class StatsTests(unittest.IsolatedAsyncioTestCase):
         )
 
         products = await build_report(self.db, "products", now=NOW)
-        month = _window(products, "30 суток")
+        month = _window(products, "Месяц")
         self.assertEqual(month.count, 4)
         self.assertEqual(month.total, 47)
         self.assertEqual(_bucket(month.categories, "Фрукты").count, 2)
@@ -169,10 +170,10 @@ class StatsTests(unittest.IsolatedAsyncioTestCase):
         self.assertLess(by_count.index("Альфа"), by_count.index("Богатая"))
         self.assertEqual(orders.average, 25.2)
         self.assertIn("25.2", format_report(orders))
-        self.assertEqual(_window(orders, "7 суток").total, 126)
-        self.assertEqual(_window(orders, "30 суток").count, 5)
-        self.assertEqual(_window(orders, "90 суток").total, 135)
-        self.assertEqual(_window(orders, "365 суток").total, 135)
+        self.assertEqual(_window(orders, "Неделя").total, 124)
+        self.assertEqual(_window(orders, "Месяц").count, 5)
+        self.assertEqual(_window(orders, "Квартал").total, 135)
+        self.assertEqual(_window(orders, "Год").total, 135)
         self.assertEqual(_window(orders, "Всё время").total, 136)
 
     async def test_empty_month_has_no_average(self) -> None:

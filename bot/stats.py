@@ -9,15 +9,7 @@ from bot.db import Database
 
 MINSK = ZoneInfo("Europe/Minsk")
 
-_WINDOWS = (
-    ("Сегодня", "today"),
-    ("7 суток", 7),
-    ("14 суток", 14),
-    ("30 суток", 30),
-    ("90 суток", 90),
-    ("365 суток", 365),
-    ("Всё время", None),
-)
+_MONTH = "Месяц"
 
 
 @dataclass(frozen=True)
@@ -59,21 +51,24 @@ def _stamp(moment: datetime) -> str:
 def _window_starts(now: datetime) -> list[tuple[str, str | None, str]]:
     if now.tzinfo is None:
         now = now.replace(tzinfo=timezone.utc)
-    now_utc = now.astimezone(timezone.utc)
-    midnight = now_utc.astimezone(MINSK).replace(
-        hour=0, minute=0, second=0, microsecond=0
+    local = now.astimezone(MINSK)
+    end = _stamp(local)
+    today = local.replace(hour=0, minute=0, second=0, microsecond=0)
+    week = today - timedelta(days=today.weekday())
+    quarter_month = ((today.month - 1) // 3) * 3 + 1
+    bounds = (
+        ("Сегодня", today),
+        ("Неделя", week),
+        ("2 недели", week - timedelta(days=7)),
+        (_MONTH, today.replace(day=1)),
+        ("Квартал", today.replace(month=quarter_month, day=1)),
+        ("Год", today.replace(month=1, day=1)),
+        ("Всё время", None),
     )
-    end = _stamp(now_utc)
-    starts: list[tuple[str, str | None, str]] = []
-    for label, size in _WINDOWS:
-        if size == "today":
-            start: str | None = _stamp(midnight)
-        elif size is None:
-            start = None
-        else:
-            start = _stamp(now_utc - timedelta(days=size))
-        starts.append((label, start, end))
-    return starts
+    return [
+        (label, None if start is None else _stamp(start), end)
+        for label, start in bounds
+    ]
 
 
 def _inside(stamp: str, start: str | None, end: str) -> bool:
@@ -273,7 +268,7 @@ async def build_report(
         if label == "Всё время":
             all_categories = cats
             all_subcategories = subs
-        if label == "30 суток":
+        if label == _MONTH:
             month_count = count
             month_total = total
     average = None if month_count == 0 else month_total / month_count
@@ -319,9 +314,9 @@ def format_report(report: Report) -> str:
         )
     lines.append("")
     if report.average is None:
-        lines.append("Средняя за 30 суток: средней нет")
+        lines.append("Средняя за месяц: средней нет")
     else:
-        lines.append(f"Средняя за 30 суток: {report.average:.1f} Br")
+        lines.append(f"Средняя за месяц: {report.average:.1f} Br")
     for window in report.windows:
         lines.extend(
             [
