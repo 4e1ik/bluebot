@@ -1,0 +1,13 @@
+name: blubot
+
+services:
+  bot:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - bot-data:/app/data
+
+volumes:
+  bot-data:

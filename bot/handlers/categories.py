@@ -322,3 +322,55 @@ async def subcategory_rebind_save(callback: CallbackQuery, db: Database) -> None
         reply_markup=subcategory_manage_kb(int(subcategory_id), sub["category_id"]),
     )
     await callback.answer("Перепривязано")
+
+
+_DELETE_REASONS = {
+    "has_items": "Нельзя удалить: внутри есть товары.",
+    "has_subcategories": "Нельзя удалить: внутри есть подкатегории.",
+    "has_both": "Нельзя удалить: внутри есть подкатегории и товары.",
+}
+
+
+@admin_router.callback_query(F.data.startswith("admin:cat:delete:"))
+async def category_delete(callback: CallbackQuery, db: Database) -> None:
+    category_id = int(callback.data.split(":")[3])
+    result = await db.delete_category(category_id)
+    if result == "missing":
+        await callback.answer("Категория не найдена", show_alert=True)
+        return
+    if result != "ok":
+        await callback.answer(_DELETE_REASONS[result], show_alert=True)
+        return
+    text, markup = await _categories_view(db)
+    await callback.message.edit_text(
+        f"Категория удалена.\n\n{text}",
+        reply_markup=markup,
+    )
+    await callback.answer("Категория удалена")
+
+
+@admin_router.callback_query(F.data.startswith("admin:sub:delete:"))
+async def subcategory_delete(callback: CallbackQuery, db: Database) -> None:
+    subcategory_id = int(callback.data.split(":")[3])
+    sub = await db.get_subcategory(subcategory_id)
+    parent_id = sub["category_id"] if sub else None
+    result = await db.delete_subcategory(subcategory_id)
+    if result == "missing":
+        await callback.answer("Подкатегория не найдена", show_alert=True)
+        return
+    if result != "ok":
+        await callback.answer(_DELETE_REASONS[result], show_alert=True)
+        return
+    view = await _category_view(db, parent_id) if parent_id is not None else None
+    if view is None:
+        text, markup = await _categories_view(db)
+        await callback.message.edit_text(
+            f"Подкатегория удалена.\n\n{text}",
+            reply_markup=markup,
+        )
+    else:
+        await callback.message.edit_text(
+            f"Подкатегория удалена.\n\n{view[0]}",
+            reply_markup=view[1],
+        )
+    await callback.answer("Подкатегория удалена")

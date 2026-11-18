@@ -30,6 +30,12 @@ def main_menu_kb(is_admin: bool, is_super: bool = False) -> ReplyKeyboardMarkup:
             ]
         )
         rows.append([KeyboardButton(text="Уведомить о новинках")])
+        rows.append(
+            [
+                KeyboardButton(text="Статистика заказов"),
+                KeyboardButton(text="Статистика товаров"),
+            ]
+        )
     if is_super:
         rows.append([KeyboardButton(text="Админы")])
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
@@ -176,7 +182,13 @@ def category_manage_kb(category_id: int, subcategories: list) -> InlineKeyboardM
                 text="✏️ Название",
                 callback_data=f"admin:cat:rename:{category_id}",
             )
-        ]
+        ],
+        [
+            InlineKeyboardButton(
+                text="Удалить",
+                callback_data=f"admin:cat:delete:{category_id}",
+            )
+        ],
     ]
     rows.extend(
         [
@@ -206,6 +218,12 @@ def subcategory_manage_kb(
                 InlineKeyboardButton(
                     text="🔗 Перепривязать",
                     callback_data=f"admin:sub:rebind:{subcategory_id}",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="Удалить",
+                    callback_data=f"admin:sub:delete:{subcategory_id}",
                 )
             ],
             [

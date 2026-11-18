@@ -1,5 +1,7 @@
 # Деплой blubot на VPS
 
+Бот — отдельный Docker Compose проект. VPN, который уже крутится на сервере, не входит в этот файл и свою сеть боту не отдаёт. Боту нужен исходящий HTTPS к Telegram с самого сервера.
+
 ## 1. Создать бота
 
 1. Открыть [@BotFather](https://t.me/BotFather)
@@ -8,17 +10,16 @@
 
 ## 2. Подготовка сервера
 
+На сервере нужны Docker и Docker Compose plugin. Каталог бота не должен быть каталогом VPN.
+
 ```bash
-sudo apt update && sudo apt install -y python3 python3-venv git
 git clone <repo-url> blubot && cd blubot
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
 cp .env.example .env
 nano .env
 ```
 
 Заполнить `.env`:
+
 ```
 BOT_TOKEN=...
 SUPERUSER_ID=...
@@ -26,46 +27,28 @@ SUPERUSER_USERNAME=superuser_telegram
 DB_PATH=data/blubot.db
 CART_TTL_MINUTES=20
 ```
-## 3. Первый запуск
+
+`DB_PATH` оставить `data/blubot.db`: этот каталог смонтирован в том `bot-data` и переживает пересоздание контейнера.
+
+## 3. Запуск
 
 ```bash
-mkdir -p data
-python -m bot.main
+docker compose up -d --build
+docker compose ps
+docker compose logs -f bot
 ```
 
-## 4. systemd (автозапуск)
+В журнале должно появиться `Bot started`. После изменений в коде:
 
 ```bash
-sudo nano /etc/systemd/system/blubot.service
+docker compose up -d --build
 ```
 
-```ini
-[Unit]
-Description=BluBot Telegram Bot
-After=network.target
+`docker compose down` останавливает контейнер и не удаляет том с базой. Том удаляется только вместе с флагом `-v`.
 
-[Service]
-Type=simple
-User=ubuntu
-WorkingDirectory=/home/ubuntu/blubot
-ExecStart=/home/ubuntu/blubot/.venv/bin/python -m bot.main
-Restart=always
-RestartSec=5
+## 4. Smoke-test
 
-[Install]
-WantedBy=multi-user.target
-```
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable blubot
-sudo systemctl start blubot
-sudo systemctl status blubot
-```
-
-## 5. Smoke-test
-
-1. `/start` от супера — админ-меню + «Админы»
+1. `/start` от супера — админ-меню, «Админы», «Статистика заказов» и «Статистика товаров»
 2. Добавить админа → админ делает `/start` (чтобы пришёл `user_id`)
 3. Добавить пользователя в whitelist
 4. Добавить товар
@@ -73,8 +56,4 @@ sudo systemctl status blubot
 6. Админ получает уведомление; «Ожидают» → подтвердить
 7. Товар исчез из каталога
 
-## Логи
-
-```bash
-sudo journalctl -u blubot -f
-```
+Локальная база с проверочными товарами в образ не входит. На сервере база создаётся пустой, пока в том сами не положат файл `blubot.db`.

@@ -6,6 +6,7 @@
 - aiogram 3 (long polling)
 - aiosqlite
 - python-dotenv
+- Pillow (локальная диаграмма статистики)
 
 ## Структура
 
@@ -14,6 +15,8 @@ bot/
 ├── main.py              # entry point, protect_content default
 ├── config.py            # SUPERUSER_*, CART_TTL_MINUTES
 ├── db.py
+├── stats.py             # окна и агрегаты заказов и товаров
+├── chart.py             # PNG столбцов категорий
 ├── catalog_nav.py       # дерево каталога и подпись привязки
 ├── notify.py            # notify_admins (без супера)
 ├── filters.py
@@ -22,7 +25,8 @@ bot/
 ├── handlers/
 │   ├── common.py        # /start, Помощь
 │   ├── catalog.py
-│   ├── categories.py    # категории и подкатегории
+│   ├── categories.py    # категории и подкатегории, удаление пустых
+│   ├── stats.py         # статистика заказов и товаров
 │   ├── booking.py       # корзина, оформить/очистить
 │   └── admin.py
 └── tasks/expiry.py      # 20 мин pending → expired

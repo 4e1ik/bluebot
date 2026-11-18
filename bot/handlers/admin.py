@@ -992,3 +992,4 @@ async def admin_manage_username(
 
 
 import bot.handlers.categories  # noqa: F401, E402  registers category handlers
+import bot.handlers.stats  # noqa: F401, E402  registers statistics handlers

@@ -58,6 +58,29 @@ CREATE TABLE IF NOT EXISTS bookings (
     expires_at TEXT NOT NULL,
     FOREIGN KEY (item_id) REFERENCES items(id)
 );
+
+CREATE TABLE IF NOT EXISTS orders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    username TEXT,
+    submitted_at TEXT NOT NULL,
+    confirmed_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS order_lines (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_id INTEGER NOT NULL,
+    item_id INTEGER,
+    confirmed_at TEXT NOT NULL,
+    price REAL NOT NULL,
+    category_id INTEGER,
+    category_name TEXT,
+    subcategory_id INTEGER,
+    subcategory_name TEXT,
+    parent_category_id INTEGER,
+    parent_category_name TEXT,
+    FOREIGN KEY (order_id) REFERENCES orders(id)
+);
 """
 
 
@@ -146,6 +169,10 @@ class Database:
                 await db.execute(
                     "ALTER TABLE items ADD COLUMN subcategory_id INTEGER"
                 )
+            cur = await db.execute("PRAGMA table_info(bookings)")
+            booking_cols = {row[1] for row in await cur.fetchall()}
+            if "order_id" not in booking_cols:
+                await db.execute("ALTER TABLE bookings ADD COLUMN order_id INTEGER")
             await db.commit()
 
     async def is_whitelisted(self, username: str | None) -> bool:
@@ -670,10 +697,15 @@ class Database:
         if not bookings:
             return []
         async with aiosqlite.connect(self.path) as db:
+            cursor = await db.execute(
+                "INSERT INTO orders (user_id, username, submitted_at) VALUES (?, ?, ?)",
+                (user_id, bookings[0]["username"], _fmt(_now())),
+            )
+            order_id = cursor.lastrowid
             await db.execute(
-                "UPDATE bookings SET status = 'submitted' "
+                "UPDATE bookings SET status = 'submitted', order_id = ? "
                 "WHERE user_id = ? AND status = 'pending'",
-                (user_id,),
+                (order_id, user_id),
             )
             await db.commit()
         return bookings
@@ -764,12 +796,99 @@ class Database:
         )
         return True
 
-    async def confirm_booking(self, booking_id: int) -> bool:
+    async def confirm_booking(
+        self, booking_id: int, when: datetime | None = None
+    ) -> bool:
+        moment = when or _now()
+        if moment.tzinfo is None:
+            moment = moment.replace(tzinfo=timezone.utc)
+        stamp = _fmt(moment.astimezone(timezone.utc))
         async with aiosqlite.connect(self.path) as db:
-            ok = await self._finish_booking(db, booking_id, "confirmed", "hidden")
-            if ok:
-                await db.commit()
-            return ok
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "SELECT * FROM bookings WHERE id = ? AND status = 'submitted'",
+                (booking_id,),
+            )
+            booking = await cursor.fetchone()
+            if not booking:
+                return False
+            cursor = await db.execute(
+                _ITEM_WITH_PLACEMENT + " WHERE i.id = ?",
+                (booking["item_id"],),
+            )
+            item = await cursor.fetchone()
+            if item is None:
+                return False
+            order_id = booking["order_id"]
+            if order_id is None:
+                cursor = await db.execute(
+                    "INSERT INTO orders (user_id, username, submitted_at) "
+                    "VALUES (?, ?, ?)",
+                    (booking["user_id"], booking["username"], booking["created_at"]),
+                )
+                order_id = cursor.lastrowid
+                await db.execute(
+                    "UPDATE bookings SET order_id = ? WHERE id = ?",
+                    (order_id, booking_id),
+                )
+            if item["subcategory_id"] is not None:
+                category_id = None
+                category_name = None
+                subcategory_id = item["subcategory_id"]
+                subcategory_name = item["subcategory_name"]
+                parent_category_id = item["parent_category_id"]
+                parent_category_name = item["parent_category_name"]
+            elif item["category_id"] is not None:
+                category_id = item["category_id"]
+                category_name = item["category_name"]
+                subcategory_id = None
+                subcategory_name = None
+                parent_category_id = None
+                parent_category_name = None
+            else:
+                category_id = None
+                category_name = None
+                subcategory_id = None
+                subcategory_name = None
+                parent_category_id = None
+                parent_category_name = None
+            await db.execute(
+                """
+                INSERT INTO order_lines (
+                    order_id, item_id, confirmed_at, price,
+                    category_id, category_name,
+                    subcategory_id, subcategory_name,
+                    parent_category_id, parent_category_name
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    order_id,
+                    item["id"],
+                    stamp,
+                    item["price"],
+                    category_id,
+                    category_name,
+                    subcategory_id,
+                    subcategory_name,
+                    parent_category_id,
+                    parent_category_name,
+                ),
+            )
+            await db.execute(
+                "UPDATE orders SET confirmed_at = ? "
+                "WHERE id = ? AND confirmed_at IS NULL",
+                (stamp, order_id),
+            )
+            await db.execute(
+                "UPDATE bookings SET status = 'confirmed' WHERE id = ?",
+                (booking_id,),
+            )
+            await db.execute(
+                "UPDATE items SET status = 'hidden' WHERE id = ?",
+                (item["id"],),
+            )
+            await db.commit()
+            return True
 
     async def reject_booking(self, booking_id: int) -> bool:
         async with aiosqlite.connect(self.path) as db:
@@ -819,3 +938,88 @@ class Database:
                 )
             await db.commit()
             return expired
+
+    async def list_order_lines(self) -> list[dict[str, Any]]:
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                """
+                SELECT
+                    ol.order_id,
+                    ol.confirmed_at AS line_confirmed_at,
+                    ol.price,
+                    ol.category_id,
+                    ol.category_name,
+                    ol.subcategory_id,
+                    ol.subcategory_name,
+                    ol.parent_category_id,
+                    ol.parent_category_name,
+                    o.confirmed_at AS order_confirmed_at
+                FROM order_lines ol
+                JOIN orders o ON o.id = ol.order_id
+                WHERE o.confirmed_at IS NOT NULL
+                """
+            )
+            return [dict(row) for row in await cursor.fetchall()]
+
+    async def list_all_subcategories(self) -> list[dict[str, Any]]:
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                """
+                SELECT sc.id, sc.name, sc.category_id, c.name AS parent_name
+                FROM subcategories sc
+                JOIN categories c ON c.id = sc.category_id
+                """
+            )
+            rows = list(await cursor.fetchall())
+        return [
+            dict(row)
+            for row in sorted(rows, key=lambda row: (row["name"].casefold(), row["id"]))
+        ]
+
+    async def delete_category(self, category_id: int) -> str:
+        async with aiosqlite.connect(self.path) as db:
+            cursor = await db.execute(
+                "SELECT 1 FROM categories WHERE id = ?", (category_id,)
+            )
+            if await cursor.fetchone() is None:
+                return "missing"
+            cursor = await db.execute(
+                "SELECT COUNT(*) FROM subcategories WHERE category_id = ?",
+                (category_id,),
+            )
+            subcategories = int((await cursor.fetchone())[0])
+            cursor = await db.execute(
+                "SELECT COUNT(*) FROM items WHERE category_id = ?",
+                (category_id,),
+            )
+            items = int((await cursor.fetchone())[0])
+            if subcategories and items:
+                return "has_both"
+            if subcategories:
+                return "has_subcategories"
+            if items:
+                return "has_items"
+            await db.execute("DELETE FROM categories WHERE id = ?", (category_id,))
+            await db.commit()
+            return "ok"
+
+    async def delete_subcategory(self, subcategory_id: int) -> str:
+        async with aiosqlite.connect(self.path) as db:
+            cursor = await db.execute(
+                "SELECT 1 FROM subcategories WHERE id = ?", (subcategory_id,)
+            )
+            if await cursor.fetchone() is None:
+                return "missing"
+            cursor = await db.execute(
+                "SELECT COUNT(*) FROM items WHERE subcategory_id = ?",
+                (subcategory_id,),
+            )
+            if int((await cursor.fetchone())[0]):
+                return "has_items"
+            await db.execute(
+                "DELETE FROM subcategories WHERE id = ?", (subcategory_id,)
+            )
+            await db.commit()
+            return "ok"

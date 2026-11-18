@@ -1,0 +1,14 @@
+.git
+.venv
+venv
+.env
+data
+__pycache__
+*.pyc
+.cursor
+.specify
+specs
+tests
+docs
+scripts
+*.md
