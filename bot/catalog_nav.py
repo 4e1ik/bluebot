@@ -98,7 +98,7 @@ async def root_screen(db: Database) -> tuple[str, InlineKeyboardMarkup]:
 
 
 async def category_screen(
-    db: Database, category_id: int
+    db: Database, category_id: int, show_listing_date: bool = False
 ) -> tuple[str, InlineKeyboardMarkup] | None:
     category = await db.get_category(category_id)
     if category is None:
@@ -111,11 +111,13 @@ async def category_screen(
     title = f"<b>{escape(category['name'])}</b>"
     if not subs and not items:
         title = f"{title}\nВ этой категории пока пусто."
-    return title, category_browse_kb(subs, items)
+    return title, category_browse_kb(
+        subs, items, show_listing_date=show_listing_date
+    )
 
 
 async def subcategory_screen(
-    db: Database, subcategory_id: int
+    db: Database, subcategory_id: int, show_listing_date: bool = False
 ) -> tuple[str, InlineKeyboardMarkup] | None:
     sub = await db.get_subcategory(subcategory_id)
     if sub is None:
@@ -126,14 +128,16 @@ async def subcategory_screen(
     title = f"<b>{escape(parent_name)} → {escape(sub['name'])}</b>"
     if not items:
         title = f"{title}\nВ этой подкатегории пока пусто."
-    return title, subcategory_browse_kb(sub["category_id"], items)
+    return title, subcategory_browse_kb(
+        sub["category_id"], items, show_listing_date=show_listing_date
+    )
 
 
 async def uncategorized_screen(
-    db: Database,
+    db: Database, show_listing_date: bool = False
 ) -> tuple[str, InlineKeyboardMarkup]:
     items = await db.list_uncategorized_items()
     text = "<b>Без категории</b>"
     if not items:
         text = f"{text}\nТоваров без категории нет."
-    return text, uncategorized_browse_kb(items)
+    return text, uncategorized_browse_kb(items, show_listing_date=show_listing_date)

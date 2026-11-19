@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from typing import Any
 
 import aiosqlite
@@ -130,16 +131,29 @@ def _by_name(rows: list[aiosqlite.Row]) -> list[aiosqlite.Row]:
     return sorted(rows, key=lambda row: (row["name"].casefold(), row["id"]))
 
 
-def is_new_item(created_at: str | None, days: int = NEW_ITEM_DAYS) -> bool:
+def _created_moment(created_at: str | None) -> datetime | None:
     if not created_at:
-        return False
+        return None
     try:
-        created = datetime.strptime(created_at[:19], "%Y-%m-%d %H:%M:%S").replace(
+        return datetime.strptime(created_at[:19], "%Y-%m-%d %H:%M:%S").replace(
             tzinfo=timezone.utc
         )
     except ValueError:
+        return None
+
+
+def is_new_item(created_at: str | None, days: int = NEW_ITEM_DAYS) -> bool:
+    created = _created_moment(created_at)
+    if created is None:
         return False
     return created > _now() - timedelta(days=days)
+
+
+def listing_day(created_at: str | None) -> str | None:
+    created = _created_moment(created_at)
+    if created is None:
+        return None
+    return created.astimezone(ZoneInfo("Europe/Minsk")).strftime("%d.%m.%Y")
 
 
 class Database:

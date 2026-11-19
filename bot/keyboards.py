@@ -1,6 +1,6 @@
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
 
-from bot.db import is_new_item
+from bot.db import is_new_item, listing_day
 
 BUTTON_LABEL_MAX = 56
 
@@ -78,11 +78,16 @@ def admins_kb() -> InlineKeyboardMarkup:
     )
 
 
-def _item_button(item) -> InlineKeyboardButton:
+def _item_button(item, show_listing_date: bool = False) -> InlineKeyboardButton:
     status_mark = " 🔒" if item["status"] == "pending" else ""
     new_mark = "🆕 " if is_new_item(item["created_at"]) else ""
+    date_mark = ""
+    if show_listing_date:
+        day = listing_day(item["created_at"])
+        if day:
+            date_mark = f"{day} "
     label = _truncate(
-        f"{new_mark}{item['name']} — {item['price']:.0f} Br{status_mark}"
+        f"{date_mark}{new_mark}{item['name']} — {item['price']:.0f} Br{status_mark}"
     )
     return InlineKeyboardButton(text=label, callback_data=f"item:{item['id']}")
 
@@ -118,7 +123,9 @@ def catalog_root_kb(categories: list, show_uncategorized: bool) -> InlineKeyboar
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def category_browse_kb(subcategories: list, items: list) -> InlineKeyboardMarkup:
+def category_browse_kb(
+    subcategories: list, items: list, show_listing_date: bool = False
+) -> InlineKeyboardMarkup:
     rows = [
         [
             InlineKeyboardButton(
@@ -128,15 +135,15 @@ def category_browse_kb(subcategories: list, items: list) -> InlineKeyboardMarkup
         ]
         for sub in subcategories
     ]
-    rows.extend([_item_button(item)] for item in items)
+    rows.extend([_item_button(item, show_listing_date)] for item in items)
     rows.append([InlineKeyboardButton(text="← Каталог", callback_data="catalog")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def subcategory_browse_kb(
-    parent_category_id: int, items: list
+    parent_category_id: int, items: list, show_listing_date: bool = False
 ) -> InlineKeyboardMarkup:
-    rows = [[_item_button(item)] for item in items]
+    rows = [[_item_button(item, show_listing_date)] for item in items]
     rows.append(
         [
             InlineKeyboardButton(
@@ -148,8 +155,10 @@ def subcategory_browse_kb(
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def uncategorized_browse_kb(items: list) -> InlineKeyboardMarkup:
-    rows = [[_item_button(item)] for item in items]
+def uncategorized_browse_kb(
+    items: list, show_listing_date: bool = False
+) -> InlineKeyboardMarkup:
+    rows = [[_item_button(item, show_listing_date)] for item in items]
     rows.append([InlineKeyboardButton(text="← Каталог", callback_data="catalog")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 

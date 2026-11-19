@@ -11,17 +11,26 @@ from bot.catalog_nav import (
     subcategory_screen,
     uncategorized_screen,
 )
-from bot.db import Database, is_new_item
+from bot.db import Database, is_new_item, listing_day
 from bot.keyboards import item_kb
 
 router = Router()
 
 
-def _item_caption(item, booking_user_id: int | None, current_user_id: int) -> str:
+def _item_caption(
+    item,
+    booking_user_id: int | None,
+    current_user_id: int,
+    show_listing_date: bool = False,
+) -> str:
     name = item["name"]
     if is_new_item(item["created_at"]):
         name = f"🆕 {name}"
     lines = [f"<b>{name}</b>", f"Цена: {item['price']:.0f} Br", placement_line(item)]
+    if show_listing_date:
+        day = listing_day(item["created_at"])
+        if day:
+            lines.append(day)
     if item["status"] == "pending":
         if booking_user_id == current_user_id:
             lines.append("\n🔒 Забронировано вами")
@@ -56,9 +65,11 @@ async def catalog_callback(callback: CallbackQuery, db: Database) -> None:
 
 
 @router.callback_query(F.data.startswith("catalog:cat:"))
-async def catalog_category(callback: CallbackQuery, db: Database) -> None:
+async def catalog_category(
+    callback: CallbackQuery, db: Database, is_admin: bool = False
+) -> None:
     category_id = int(callback.data.split(":")[2])
-    screen = await category_screen(db, category_id)
+    screen = await category_screen(db, category_id, show_listing_date=is_admin)
     if screen is None:
         await callback.answer("Категория не найдена", show_alert=True)
         return
@@ -66,9 +77,13 @@ async def catalog_category(callback: CallbackQuery, db: Database) -> None:
 
 
 @router.callback_query(F.data.startswith("catalog:sub:"))
-async def catalog_subcategory(callback: CallbackQuery, db: Database) -> None:
+async def catalog_subcategory(
+    callback: CallbackQuery, db: Database, is_admin: bool = False
+) -> None:
     subcategory_id = int(callback.data.split(":")[2])
-    screen = await subcategory_screen(db, subcategory_id)
+    screen = await subcategory_screen(
+        db, subcategory_id, show_listing_date=is_admin
+    )
     if screen is None:
         await callback.answer("Подкатегория не найдена", show_alert=True)
         return
@@ -76,8 +91,12 @@ async def catalog_subcategory(callback: CallbackQuery, db: Database) -> None:
 
 
 @router.callback_query(F.data == "catalog:none")
-async def catalog_uncategorized(callback: CallbackQuery, db: Database) -> None:
-    await _show_screen(callback, *(await uncategorized_screen(db)))
+async def catalog_uncategorized(
+    callback: CallbackQuery, db: Database, is_admin: bool = False
+) -> None:
+    await _show_screen(
+        callback, *(await uncategorized_screen(db, show_listing_date=is_admin))
+    )
 
 
 @router.callback_query(F.data.startswith("item:"))
@@ -104,7 +123,12 @@ async def show_item(
     await callback.message.delete()
     await callback.message.answer_photo(
         photo=item["photo_file_id"],
-        caption=_item_caption(item, booking_user_id, callback.from_user.id),
+        caption=_item_caption(
+            item,
+            booking_user_id,
+            callback.from_user.id,
+            show_listing_date=is_admin,
+        ),
         reply_markup=item_kb(
             item_id,
             item["status"],
